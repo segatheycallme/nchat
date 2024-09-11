@@ -933,22 +933,6 @@ void WmDeleteChatNotify(int p_ConnId, char* p_ChatId)
 
 void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
 {
-  WmChat* instance = WmChat::GetInstance(p_ConnId);
-  if (instance == nullptr) return;
-
-  {
-    std::shared_ptr<DeleteMessageNotify> deleteMessageNotify =
-      std::make_shared<DeleteMessageNotify>(instance->GetProfileId());
-    deleteMessageNotify->success = true;
-    deleteMessageNotify->chatId = std::string(p_ChatId);
-    deleteMessageNotify->msgId = std::string(p_MsgId);
-
-    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest =
-      std::make_shared<DeferNotifyRequest>();
-    deferNotifyRequest->serviceMessage = deleteMessageNotify;
-    instance->SendRequest(deferNotifyRequest);
-  }
-
   free(p_ChatId);
   free(p_MsgId);
 }
