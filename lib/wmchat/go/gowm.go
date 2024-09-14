@@ -2185,38 +2185,6 @@ func WmGetStatus(connId int, userId string) int {
 }
 
 func WmMarkMessageRead(connId int, chatId string, senderId string, msgId string) int {
-
-	LOG_TRACE("mark message read " + strconv.Itoa(connId) + ", " + chatId + ", " + senderId + ", " + msgId)
-
-	// sanity check arg
-	if connId == -1 {
-		LOG_WARNING("invalid connId")
-		return -1
-	}
-
-	// get client
-	client := GetClient(connId)
-
-	// mark read
-	msgIds := []types.MessageID{
-		msgId,
-	}
-	timeRead := time.Now()
-	chatJid, _ := types.ParseJID(chatId)
-	senderJid, _ := types.ParseJID(senderId)
-	err := client.MarkRead(msgIds, timeRead, chatJid, senderJid)
-
-	// store time
-	SetTimeRead(connId, chatId, timeRead)
-
-	// log any error
-	if err != nil {
-		LOG_WARNING(fmt.Sprintf("mark message read error %#v", err))
-		return -1
-	} else {
-		LOG_TRACE(fmt.Sprintf("mark message read ok %#v", msgId))
-	}
-
 	return 0
 }
 
