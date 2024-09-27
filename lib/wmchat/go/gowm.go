@@ -2185,6 +2185,10 @@ func WmGetStatus(connId int, userId string) int {
 }
 
 func WmMarkMessageRead(connId int, chatId string, senderId string, msgId string) int {
+	name := os.Getenv("NCHAT_NO_READ")
+	if name == "YES" {
+		return 0
+	} 
 
 	LOG_TRACE("mark message read " + strconv.Itoa(connId) + ", " + chatId + ", " + senderId + ", " + msgId)
 
