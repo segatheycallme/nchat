@@ -101,33 +101,17 @@ FileId AudiosManager::on_get_audio(unique_ptr<Audio> new_audio, bool replace) {
     a = std::move(new_audio);
   } else if (replace) {
     CHECK(a->file_id == new_audio->file_id);
-    if (a->mime_type != new_audio->mime_type) {
+    if (a->mime_type != new_audio->mime_type || a->duration != new_audio->duration || a->title != new_audio->title ||
+        a->performer != new_audio->performer || a->file_name != new_audio->file_name || a->date != new_audio->date ||
+        a->minithumbnail != new_audio->minithumbnail || a->thumbnail != new_audio->thumbnail) {
       LOG(DEBUG) << "Audio " << file_id << " info has changed";
       a->mime_type = std::move(new_audio->mime_type);
-    }
-    if (a->duration != new_audio->duration || a->title != new_audio->title || a->performer != new_audio->performer) {
-      LOG(DEBUG) << "Audio " << file_id << " info has changed";
       a->duration = new_audio->duration;
       a->title = std::move(new_audio->title);
       a->performer = std::move(new_audio->performer);
-    }
-    if (a->file_name != new_audio->file_name) {
-      LOG(DEBUG) << "Audio " << file_id << " file name has changed";
       a->file_name = std::move(new_audio->file_name);
-    }
-    if (a->date != new_audio->date) {
       a->date = new_audio->date;
-    }
-    if (a->minithumbnail != new_audio->minithumbnail) {
       a->minithumbnail = std::move(new_audio->minithumbnail);
-    }
-    if (a->thumbnail != new_audio->thumbnail) {
-      if (!a->thumbnail.file_id.is_valid()) {
-        LOG(DEBUG) << "Audio " << file_id << " thumbnail has changed";
-      } else {
-        LOG(INFO) << "Audio " << file_id << " thumbnail has changed from " << a->thumbnail << " to "
-                  << new_audio->thumbnail;
-      }
       a->thumbnail = std::move(new_audio->thumbnail);
     }
   }
@@ -143,10 +127,11 @@ FileId AudiosManager::dup_audio(FileId new_id, FileId old_id) {
   const Audio *old_audio = get_audio(old_id);
   CHECK(old_audio != nullptr);
   auto &new_audio = audios_[new_id];
-  CHECK(new_audio == nullptr);
+  if (new_audio != nullptr) {
+    return new_id;
+  }
   new_audio = make_unique<Audio>(*old_audio);
   new_audio->file_id = new_id;
-  new_audio->thumbnail.file_id = td_->file_manager_->dup_file_id(new_audio->thumbnail.file_id, "dup_audio");
   return new_id;
 }
 
@@ -164,10 +149,6 @@ void AudiosManager::merge_audios(FileId new_id, FileId old_id) {
   } else {
     if (!old_->mime_type.empty() && old_->mime_type != new_->mime_type) {
       LOG(INFO) << "Audio has changed: mime_type = (" << old_->mime_type << ", " << new_->mime_type << ")";
-    }
-
-    if (old_->thumbnail != new_->thumbnail) {
-      //    LOG_STATUS(td_->file_manager_->merge(new_->thumbnail.file_id, old_->thumbnail.file_id));
     }
   }
   LOG_STATUS(td_->file_manager_->merge(new_id, old_id));
@@ -228,10 +209,9 @@ void AudiosManager::create_audio(FileId file_id, string minithumbnail, PhotoSize
   on_get_audio(std::move(a), replace);
 }
 
-SecretInputMedia AudiosManager::get_secret_input_media(FileId audio_file_id,
-                                                       tl_object_ptr<telegram_api::InputEncryptedFile> input_file,
-                                                       const string &caption, BufferSlice thumbnail,
-                                                       int32 layer) const {
+SecretInputMedia AudiosManager::get_secret_input_media(
+    FileId audio_file_id, telegram_api::object_ptr<telegram_api::InputEncryptedFile> input_file, const string &caption,
+    BufferSlice thumbnail, int32 layer) const {
   auto *audio = get_audio(audio_file_id);
   CHECK(audio != nullptr);
   auto file_view = td_->file_manager_->get_file_view(audio_file_id);
@@ -267,8 +247,8 @@ SecretInputMedia AudiosManager::get_secret_input_media(FileId audio_file_id,
 }
 
 tl_object_ptr<telegram_api::InputMedia> AudiosManager::get_input_media(
-    FileId file_id, tl_object_ptr<telegram_api::InputFile> input_file,
-    tl_object_ptr<telegram_api::InputFile> input_thumbnail) const {
+    FileId file_id, telegram_api::object_ptr<telegram_api::InputFile> input_file,
+    telegram_api::object_ptr<telegram_api::InputFile> input_thumbnail) const {
   auto file_view = td_->file_manager_->get_file_view(file_id);
   if (file_view.is_encrypted()) {
     return nullptr;

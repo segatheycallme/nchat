@@ -14,11 +14,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +47,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-var whatsmeowDate int = 20240906
+var whatsmeowDate int = 20241121
 
 type JSONMessage []json.RawMessage
 type JSONMessageType string
@@ -224,7 +227,7 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 
 	info.MediaType = whatsmeow.GetMediaType(msg)
 	if len(info.MediaType) == 0 {
-		LOG_WARNING(fmt.Sprintf("unknown mediatype '%s'", string(msg.ProtoReflect().Descriptor().Name())))
+		LOG_WARNING(fmt.Sprintf("unknown mediatype in msg %+v", msg))
 		return ""
 	}
 
@@ -465,6 +468,29 @@ func ParseWebMessageInfo(selfJid types.JID, chatJid types.JID, webMsg *waWeb.Web
 		return nil
 	}
 	return &info
+}
+
+func SliceIndex(list []string, value string, defaultValue int) int {
+	index := slices.Index(list, value)
+	if index == -1 {
+		index = defaultValue
+	}
+	return index
+}
+
+func ExtensionByType(mimeType string, defaultExt string) string {
+	ext := defaultExt
+	exts, extErr := mime.ExtensionsByType(mimeType)
+	if extErr == nil && len(exts) > 0 {
+		// prefer common extensions over less common (.jpe, etc) returned by mime library
+		preferredExts := []string{".jpg", ".jpeg"}
+		sort.Slice(exts, func(i, j int) bool {
+			return SliceIndex(preferredExts, exts[i], math.MaxInt32) < SliceIndex(preferredExts, exts[j], math.MaxInt32)
+		})
+		ext = exts[0]
+	}
+
+	return ext
 }
 
 // logger
@@ -1084,11 +1110,7 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 	}
 
 	// get extension
-	ext := "jpg"
-	exts, extErr := mime.ExtensionsByType(img.GetMimetype())
-	if extErr != nil && len(exts) > 0 {
-		ext = exts[0]
-	}
+	ext := ExtensionByType(img.GetMimetype(), ".jpg")
 
 	// text
 	text := img.GetCaption()
@@ -1102,7 +1124,7 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 
 	// file id, path and status
 	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s.%s", tmpPath, messageInfo.ID, ext)
+	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
 	fileId := DownloadableMessageToFileId(client, img, filePath)
 	fileStatus := FileStatusNotDownloaded
 
@@ -1137,11 +1159,7 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 	}
 
 	// get extension
-	ext := "mp4"
-	exts, extErr := mime.ExtensionsByType(vid.GetMimetype())
-	if extErr != nil && len(exts) > 0 {
-		ext = exts[0]
-	}
+	ext := ExtensionByType(vid.GetMimetype(), ".mp4")
 
 	// text
 	text := vid.GetCaption()
@@ -1155,7 +1173,7 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 
 	// file id, path and status
 	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s.%s", tmpPath, messageInfo.ID, ext)
+	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
 	fileId := DownloadableMessageToFileId(client, vid, filePath)
 	fileStatus := FileStatusNotDownloaded
 
@@ -1190,11 +1208,7 @@ func (handler *WmEventHandler) HandleAudioMessage(messageInfo types.MessageInfo,
 	}
 
 	// get extension
-	ext := "ogg"
-	exts, extErr := mime.ExtensionsByType(aud.GetMimetype())
-	if extErr != nil && len(exts) > 0 {
-		ext = exts[0]
-	}
+	ext := ExtensionByType(aud.GetMimetype(), ".ogg")
 
 	// text
 	text := ""
@@ -1208,7 +1222,7 @@ func (handler *WmEventHandler) HandleAudioMessage(messageInfo types.MessageInfo,
 
 	// file id, path and status
 	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s.%s", tmpPath, messageInfo.ID, ext)
+	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
 	fileId := DownloadableMessageToFileId(client, aud, filePath)
 	fileStatus := FileStatusNotDownloaded
 
@@ -1289,14 +1303,10 @@ func (handler *WmEventHandler) HandleStickerMessage(messageInfo types.MessageInf
 	}
 
 	// get extension
-	ext := "webp"
-	exts, extErr := mime.ExtensionsByType(sticker.GetMimetype())
-	if extErr != nil && len(exts) > 0 {
-		ext = exts[0]
-	}
+	ext := ExtensionByType(sticker.GetMimetype(), ".webp")
 
 	// text
-	text := "[Sticker]"
+	text := ""
 
 	// context
 	quotedId := ""
@@ -1307,7 +1317,7 @@ func (handler *WmEventHandler) HandleStickerMessage(messageInfo types.MessageInf
 
 	// file id, path and status
 	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s.%s", tmpPath, messageInfo.ID, ext)
+	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
 	fileId := DownloadableMessageToFileId(client, sticker, filePath)
 	fileStatus := FileStatusNotDownloaded
 

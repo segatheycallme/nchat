@@ -380,7 +380,7 @@ static vector<Slice> match_hashtags(Slice str) {
   const unsigned char *end = str.uend();
   const unsigned char *ptr = begin;
 
-  // '/(?<=^|[^\d_\pL\x{200c}\x{0d80}-\x{0dff}])#([\d_\pL\x{200c}\x{0d80}-\x{0dff}]{1,256})(?![\d_\pL\x{200c}\x{0d80}-\x{0dff}]*#)/u'
+  // '/(?<=^|[^is_hashtag_letter])#([is_hashtag_letter]{1,256})(?:@([a-zA-Z0-9_]{3,32}))?(?![is_hashtag_letter]*#)/u'
   // and at least one letter
 
   UnicodeSimpleCategory category;
@@ -426,6 +426,17 @@ static vector<Slice> match_hashtags(Slice str) {
     if (hashtag_size < 1) {
       continue;
     }
+    if (hashtag_end == ptr && ptr != end && ptr[0] == '@') {
+      auto username_end = ptr + 1;
+      while (username_end != end && username_end - ptr < 33 && is_alpha_digit_or_underscore(*username_end)) {
+        username_end++;
+      }
+      auto length = username_end - ptr - 1;
+      if (length >= 3) {
+        ptr = username_end;
+        hashtag_end = username_end;
+      }
+    }
     if (ptr != end && ptr[0] == '#') {
       continue;
     }
@@ -443,7 +454,7 @@ static vector<Slice> match_cashtags(Slice str) {
   const unsigned char *end = str.uend();
   const unsigned char *ptr = begin;
 
-  // '/(?<=^|[^$\d_\pL\x{200c}\x{0d80}-\x{0dff}])\$(1INCH|[A-Z]{1,8})(?![$\d_\pL\x{200c}\x{0d80}-\x{0dff}])/u'
+  // '/(?<=^|[^$is_hashtag_letter])\$(1INCH|[A-Z]{1,8})(?:@([a-zA-Z0-9_]{3,32}))?(?![$is_hashtag_letter])/u'
 
   UnicodeSimpleCategory category;
   while (true) {
@@ -475,7 +486,17 @@ static vector<Slice> match_cashtags(Slice str) {
     if (cashtag_size < 1 || cashtag_size > 8) {
       continue;
     }
-
+    if (ptr != end && ptr[0] == '@') {
+      auto username_end = ptr + 1;
+      while (username_end != end && is_alpha_digit_or_underscore(*username_end)) {
+        username_end++;
+      }
+      auto length = username_end - ptr - 1;
+      if (length >= 3 && length <= 32) {
+        cashtag_end = username_end;
+        ptr = username_end;
+      }
+    }
     if (cashtag_end != end) {
       uint32 code;
       next_utf8_unsafe(ptr, &code);
@@ -3829,9 +3850,8 @@ vector<MessageEntity> get_message_entities(const UserManager *user_manager,
           LOG(ERROR) << "Receive unknown " << user_id << " in MentionName from " << source;
           continue;
         }
-        auto r_input_user = user_manager->get_input_user(user_id);
-        if (r_input_user.is_error()) {
-          LOG(ERROR) << "Receive wrong " << user_id << ": " << r_input_user.error() << " from " << source;
+        if (!user_manager->have_min_user(user_id)) {
+          LOG(ERROR) << "Receive wrong " << user_id << " from " << source;
           continue;
         }
         entities.emplace_back(entity->offset_, entity->length_, user_id);
@@ -4016,7 +4036,9 @@ FormattedText get_formatted_text(const UserManager *user_manager, string &&text,
 FormattedText get_formatted_text(const UserManager *user_manager,
                                  telegram_api::object_ptr<telegram_api::textWithEntities> text_with_entities,
                                  bool skip_media_timestamps, bool skip_trim, const char *source) {
-  CHECK(text_with_entities != nullptr);
+  if (text_with_entities == nullptr) {
+    return FormattedText();
+  }
   return get_formatted_text(user_manager, std::move(text_with_entities->text_),
                             std::move(text_with_entities->entities_), skip_media_timestamps, skip_trim, source);
 }
@@ -4616,7 +4638,8 @@ bool need_always_skip_bot_commands(const UserManager *user_manager, DialogId dia
   switch (dialog_id.get_type()) {
     case DialogType::User: {
       auto user_id = dialog_id.get_user_id();
-      return user_id == UserManager::get_replies_bot_user_id() || !user_manager->is_user_bot(user_id);
+      return user_id == UserManager::get_replies_bot_user_id() ||
+             user_id == UserManager::get_verification_codes_bot_user_id() || !user_manager->is_user_bot(user_id);
     }
     case DialogType::SecretChat: {
       auto user_id = user_manager->get_secret_chat_user_id(dialog_id.get_secret_chat_id());

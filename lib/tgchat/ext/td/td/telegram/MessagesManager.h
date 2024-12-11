@@ -24,6 +24,7 @@
 #include "td/telegram/EncryptedFile.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
+#include "td/telegram/files/FileUploadId.h"
 #include "td/telegram/FolderId.h"
 #include "td/telegram/InputGroupCallId.h"
 #include "td/telegram/logevent/LogEventHelper.h"
@@ -142,6 +143,7 @@ class MessagesManager final : public Actor {
   static constexpr int32 SEND_MESSAGE_FLAG_UPDATE_STICKER_SETS_ORDER = 1 << 15;
   static constexpr int32 SEND_MESSAGE_FLAG_INVERT_MEDIA = 1 << 16;
   static constexpr int32 SEND_MESSAGE_FLAG_EFFECT = 1 << 18;
+  static constexpr int32 SEND_MESSAGE_FLAG_ALLOW_PAID = 1 << 19;
 
   MessagesManager(Td *td, ActorShared<> parent);
   MessagesManager(const MessagesManager &) = delete;
@@ -151,6 +153,9 @@ class MessagesManager final : public Actor {
   ~MessagesManager() final;
 
   static bool is_invalid_poll_message(const telegram_api::Message *message);
+
+  static bool process_send_message_fail_error(int32 &error_code, string &error_message, DialogId dialog_id, bool is_bot,
+                                              MessageContentType content_type);
 
   static int32 get_message_date(const tl_object_ptr<telegram_api::Message> &message_ptr);
 
@@ -258,6 +263,8 @@ class MessagesManager final : public Actor {
                       Promise<Unit> &&promise);
 
   bool on_update_message_id(int64 random_id, MessageId new_message_id, const char *source);
+
+  void on_update_message_video_published(MessageFullId message_full_id);
 
   void on_update_dialog_draft_message(DialogId dialog_id, MessageId top_thread_message_id,
                                       tl_object_ptr<telegram_api::DraftMessage> &&draft_message, bool force = false);
@@ -581,7 +588,7 @@ class MessagesManager final : public Actor {
   void get_callback_query_message(DialogId dialog_id, MessageId message_id, int64 callback_query_id,
                                   Promise<Unit> &&promise);
 
-  bool get_messages(DialogId dialog_id, const vector<MessageId> &message_ids, Promise<Unit> &&promise);
+  void get_messages(DialogId dialog_id, const vector<MessageId> &message_ids, Promise<Unit> &&promise);
 
   void get_message_from_server(MessageFullId message_full_id, Promise<Unit> &&promise, const char *source,
                                tl_object_ptr<telegram_api::InputMessage> input_message = nullptr);
@@ -615,7 +622,8 @@ class MessagesManager final : public Actor {
     bool know_action_bar_ = false;
     bool is_reported_ = false;
   };
-  ReportDialogFromActionBar report_dialog_from_action_bar(DialogId dialog_id, Promise<Unit> &promise);
+  ReportDialogFromActionBar report_dialog_from_action_bar(
+      DialogId dialog_id, Promise<td_api::object_ptr<td_api::ReportChatResult>> &promise);
 
   bool is_deleted_secret_chat(DialogId dialog_id) const;
 
@@ -1042,6 +1050,7 @@ class MessagesManager final : public Actor {
     bool has_mention = false;
     bool has_unread_content = false;
     bool invert_media = false;
+    bool video_processing_pending = false;
 
     unique_ptr<MessageContent> content;
     tl_object_ptr<telegram_api::ReplyMarkup> reply_markup;
@@ -1070,11 +1079,13 @@ class MessagesManager final : public Actor {
     MessageId linked_top_thread_message_id;
     vector<MessageId> local_thread_message_ids;
 
-    DialogId initial_sender_dialog_id;        // for send_message
-    MessageId initial_top_thread_message_id;  // for send_message
-    MessageInputReplyTo input_reply_to;       // for send_message
-    int64 reply_to_random_id = 0;             // for send_message
-    string send_emoji;                        // for send_message
+    DialogId initial_sender_dialog_id;                       // for send_message
+    MessageId initial_top_thread_message_id;                 // for send_message
+    MessageInputReplyTo input_reply_to;                      // for send_message
+    int64 reply_to_random_id = 0;                            // for send_message
+    string send_emoji;                                       // for send_message
+    mutable vector<FileUploadId> file_upload_ids;            // for send_message
+    mutable vector<FileUploadId> thumbnail_file_upload_ids;  // for send_message
 
     UserId via_bot_user_id;
     UserId via_business_bot_user_id;
@@ -1102,10 +1113,12 @@ class MessagesManager final : public Actor {
     bool noforwards = false;
     bool invert_media = false;
     bool disable_web_page_preview = false;
+    bool video_processing_pending = false;
 
     bool has_explicit_sender = false;       // for send_message
     bool is_copy = false;                   // for send_message
     bool from_background = false;           // for send_message
+    bool allow_paid = false;                // for send_message
     bool update_stickersets_order = false;  // for send_message
     bool clear_draft = false;               // for send_message
     bool in_game_share = false;             // for send_message
@@ -1154,11 +1167,7 @@ class MessagesManager final : public Actor {
     unique_ptr<ReplyMarkup> reply_markup;
 
     int32 edited_schedule_date = 0;
-    bool edited_invert_media = false;
-    unique_ptr<MessageContent> edited_content;
-    unique_ptr<ReplyMarkup> edited_reply_markup;
     uint64 edit_generation = 0;
-    Promise<Unit> edit_promise;
 
     int32 last_edit_pts = 0;
 
@@ -1183,6 +1192,15 @@ class MessagesManager final : public Actor {
     Message(Message &&) = delete;
     Message &operator=(Message &&) = delete;
     ~Message() = default;
+  };
+
+  struct EditedMessage {
+    bool invert_media_ = false;
+    unique_ptr<MessageContent> content_;
+    mutable vector<FileUploadId> file_upload_ids_;
+    mutable vector<FileUploadId> thumbnail_file_upload_ids_;
+    unique_ptr<ReplyMarkup> reply_markup_;
+    Promise<Unit> promise_;
   };
 
   struct DialogScheduledMessages {
@@ -1513,6 +1531,7 @@ class MessagesManager final : public Actor {
     bool from_background = false;
     bool update_stickersets_order = false;
     bool protect_content = false;
+    bool allow_paid = false;
     bool only_preview = false;
     int32 schedule_date = 0;
     int32 sending_id = 0;
@@ -1520,12 +1539,13 @@ class MessagesManager final : public Actor {
 
     MessageSendOptions() = default;
     MessageSendOptions(bool disable_notification, bool from_background, bool update_stickersets_order,
-                       bool protect_content, bool only_preview, int32 schedule_date, int32 sending_id,
+                       bool protect_content, bool allow_paid, bool only_preview, int32 schedule_date, int32 sending_id,
                        MessageEffectId effect_id)
         : disable_notification(disable_notification)
         , from_background(from_background)
         , update_stickersets_order(update_stickersets_order)
         , protect_content(protect_content)
+        , allow_paid(allow_paid)
         , only_preview(only_preview)
         , schedule_date(schedule_date)
         , sending_id(sending_id)
@@ -1751,6 +1771,10 @@ class MessagesManager final : public Actor {
 
   bool can_edit_message(DialogId dialog_id, const Message *m, bool is_editing, bool only_reply_markup = false) const;
 
+  bool can_edit_message_media(DialogId dialog_id, const Message *m, bool is_editing) const;
+
+  bool can_edit_message_scheduling_state(const Message *m) const;
+
   Status can_pin_message(DialogId dialog_id, const Message *m) const TD_WARN_UNUSED_RESULT;
 
   static Status can_get_media_timestamp_link(DialogId dialog_id, const Message *m);
@@ -1769,9 +1793,9 @@ class MessagesManager final : public Actor {
 
   void cancel_edit_message_media(DialogId dialog_id, Message *m, Slice error_message);
 
-  void on_message_media_edited(DialogId dialog_id, MessageId message_id, FileId file_id, FileId thumbnail_file_id,
-                               bool was_uploaded, bool was_thumbnail_uploaded, string file_reference,
-                               int32 schedule_date, uint64 generation, Result<int32> &&result);
+  void on_message_media_edited(DialogId dialog_id, MessageId message_id, FileUploadId file_upload_id,
+                               FileUploadId thumbnail_file_upload_id, bool was_uploaded, bool was_thumbnail_uploaded,
+                               string file_reference, int32 schedule_date, uint64 generation, Result<int32> &&result);
 
   MessageId get_persistent_message_id(const Dialog *d, MessageId message_id) const;
 
@@ -1804,6 +1828,14 @@ class MessagesManager final : public Actor {
                                                   bool is_pin);
 
   bool update_message_is_pinned(Dialog *d, Message *m, bool is_pin, const char *source);
+
+  static FileUploadId get_media_file_upload_id(const vector<FileUploadId> &file_upload_ids, int32 media_pos);
+
+  FileUploadId get_message_send_file_upload_id(DialogId dialog_id, const Message *m, int32 media_pos) const;
+
+  FileUploadId get_message_send_thumbnail_file_upload_id(DialogId dialog_id, const Message *m, int32 media_pos) const;
+
+  void delete_message_send_thumbnail_file_upload_id(DialogId dialog_id, Message *m, int32 media_pos);
 
   void do_forward_messages(DialogId to_dialog_id, DialogId from_dialog_id, const vector<Message *> &messages,
                            const vector<MessageId> &message_ids, bool drop_author, bool drop_media_captions,
@@ -1875,22 +1907,20 @@ class MessagesManager final : public Actor {
                                                    td_api::object_ptr<td_api::messageSendOptions> &&options,
                                                    bool in_game_share, vector<MessageCopyOptions> &&copy_options);
 
-  void do_send_media(DialogId dialog_id, const Message *m, int32 media_pos, FileId file_id, FileId thumbnail_file_id,
-                     tl_object_ptr<telegram_api::InputFile> input_file,
-                     tl_object_ptr<telegram_api::InputFile> input_thumbnail);
+  void do_send_media(DialogId dialog_id, const Message *m, int32 media_pos,
+                     telegram_api::object_ptr<telegram_api::InputFile> input_file,
+                     telegram_api::object_ptr<telegram_api::InputFile> input_thumbnail);
 
-  void do_send_secret_media(DialogId dialog_id, const Message *m, FileId file_id, FileId thumbnail_file_id,
-                            tl_object_ptr<telegram_api::InputEncryptedFile> input_encrypted_file,
+  void do_send_secret_media(DialogId dialog_id, const Message *m,
+                            telegram_api::object_ptr<telegram_api::InputEncryptedFile> input_encrypted_file,
                             BufferSlice thumbnail);
 
   void do_send_message(DialogId dialog_id, const Message *m, int32 media_pos = -1, vector<int> bad_parts = {});
 
   void on_message_media_uploaded(DialogId dialog_id, const Message *m, int32 media_pos,
-                                 telegram_api::object_ptr<telegram_api::InputMedia> &&input_media,
-                                 vector<FileId> file_ids, vector<FileId> thumbnail_file_ids);
+                                 telegram_api::object_ptr<telegram_api::InputMedia> &&input_media);
 
-  void on_secret_message_media_uploaded(DialogId dialog_id, const Message *m, SecretInputMedia &&secret_input_media,
-                                        FileId file_id, FileId thumbnail_file_id);
+  void on_secret_message_media_uploaded(DialogId dialog_id, const Message *m, SecretInputMedia &&secret_input_media);
 
   void on_upload_message_media_finished(int64 media_album_id, DialogId dialog_id, MessageId message_id, int32 media_pos,
                                         Status result);
@@ -2371,6 +2401,8 @@ class MessagesManager final : public Actor {
   void send_update_message_send_succeeded(Dialog *d, MessageId old_message_id, const Message *m,
                                           bool *need_update_dialog_pos);
 
+  void send_update_video_published(MessageFullId message_full_id);
+
   void send_update_message_content(const Dialog *d, Message *m, bool is_message_in_dialog, const char *source);
 
   void send_update_message_content_impl(DialogId dialog_id, const Message *m, const char *source) const;
@@ -2455,7 +2487,8 @@ class MessagesManager final : public Actor {
 
   tl_object_ptr<td_api::MessageSendingState> get_message_sending_state_object(const Message *m) const;
 
-  static tl_object_ptr<td_api::MessageSchedulingState> get_message_scheduling_state_object(int32 send_date);
+  static tl_object_ptr<td_api::MessageSchedulingState> get_message_scheduling_state_object(
+      int32 send_date, bool video_processing_pending);
 
   td_api::object_ptr<td_api::MessageContent> get_message_message_content_object(DialogId dialog_id,
                                                                                 const Message *m) const;
@@ -2757,6 +2790,18 @@ class MessagesManager final : public Actor {
   DialogFolder *get_dialog_folder(FolderId folder_id);
   const DialogFolder *get_dialog_folder(FolderId folder_id) const;
 
+  void add_edited_message(DialogId dialog_id, MessageId message_id, unique_ptr<EditedMessage> edited_message);
+
+  EditedMessage *get_edited_message(DialogId dialog_id, MessageId message_id);
+
+  const EditedMessage *get_edited_message(DialogId dialog_id, MessageId message_id) const;
+
+  MessageContent *get_edited_message_content(MessageFullId message_full_id);
+
+  const MessageContent *get_edited_message_content(MessageFullId message_full_id) const;
+
+  void delete_edited_message(DialogId dialog_id, MessageId message_id);
+
   static Message *get_message(Dialog *d, MessageId message_id);
   static const Message *get_message(const Dialog *d, MessageId message_id);
   static const Message *get_message_static(const Dialog *d, MessageId message_id);
@@ -2799,9 +2844,10 @@ class MessagesManager final : public Actor {
 
   vector<FileId> get_message_file_ids(const Message *m) const;
 
-  void cancel_upload_message_content_files(const MessageContent *content);
+  void cancel_upload_message_content_files(const vector<FileUploadId> &file_upload_ids,
+                                           const vector<FileUploadId> &thumbnail_file_upload_ids);
 
-  static void cancel_upload_file(FileId file_id, const char *source);
+  static void cancel_upload_file(FileUploadId file_upload_id, const char *source);
 
   void cancel_send_message_query(DialogId dialog_id, Message *m);
 
@@ -2853,6 +2899,10 @@ class MessagesManager final : public Actor {
   void ttl_db_loop();
 
   void ttl_db_on_result(Result<std::vector<MessageDbMessage>> r_result, bool dummy);
+
+  void schedule_restore_missing_messages_after_get_difference();
+
+  void restore_missing_messages_after_get_difference();
 
   void on_restore_missing_message_after_get_difference(MessageFullId message_full_id, MessageId old_message_id,
                                                        Result<Unit> result);
@@ -2923,11 +2973,12 @@ class MessagesManager final : public Actor {
 
   void delete_bot_command_message_id(DialogId dialog_id, MessageId message_id);
 
-  void add_message_file_sources(DialogId dialog_id, const Message *m);
+  void add_message_file_sources(DialogId dialog_id, const Message *m, const char *source);
 
-  void remove_message_file_sources(DialogId dialog_id, const Message *m);
+  void remove_message_file_sources(DialogId dialog_id, const Message *m, const char *source);
 
-  void change_message_files(DialogId dialog_id, const Message *m, const vector<FileId> &old_file_ids);
+  void change_message_files(DialogId dialog_id, const Message *m, const vector<FileId> &old_file_ids,
+                            const char *source);
 
   Result<unique_ptr<ReplyMarkup>> get_dialog_reply_markup(
       DialogId dialog_id, tl_object_ptr<td_api::ReplyMarkup> &&reply_markup) const TD_WARN_UNUSED_RESULT;
@@ -3071,16 +3122,21 @@ class MessagesManager final : public Actor {
 
   static void on_live_location_expire_timeout_callback(void *messages_manager_ptr);
 
+  static void on_restore_missing_messages_timeout_callback(void *messages_manager_ptr);
+
   void on_live_location_expire_timeout();
 
-  void load_secret_thumbnail(FileId thumbnail_file_id);
+  void load_secret_thumbnail(FileUploadId thumbnail_file_upload_id);
 
-  void on_upload_media(FileId file_id, tl_object_ptr<telegram_api::InputFile> input_file,
-                       tl_object_ptr<telegram_api::InputEncryptedFile> input_encrypted_file);
-  void on_upload_media_error(FileId file_id, Status status);
+  void on_upload_media(FileUploadId file_upload_id, telegram_api::object_ptr<telegram_api::InputFile> input_file,
+                       telegram_api::object_ptr<telegram_api::InputEncryptedFile> input_encrypted_file);
 
-  void on_load_secret_thumbnail(FileId thumbnail_file_id, BufferSlice thumbnail);
-  void on_upload_thumbnail(FileId thumbnail_file_id, tl_object_ptr<telegram_api::InputFile> thumbnail_input_file);
+  void on_upload_media_error(FileUploadId file_upload_id, Status status);
+
+  void on_load_secret_thumbnail(FileUploadId thumbnail_file_upload_id, BufferSlice thumbnail);
+
+  void on_upload_thumbnail(FileUploadId thumbnail_file_upload_id,
+                           telegram_api::object_ptr<telegram_api::InputFile> thumbnail_input_file);
 
   void add_sponsored_dialog(const Dialog *d, DialogSource source);
 
@@ -3130,7 +3186,7 @@ class MessagesManager final : public Actor {
   void load_calls_db_state();
   void save_calls_db_state();
 
-  void add_message_dependencies(Dependencies &dependencies, const Message *m);
+  void add_message_dependencies(Dependencies &dependencies, const Message *m) const;
 
   static void save_send_message_log_event(DialogId dialog_id, const Message *m);
 
@@ -3221,24 +3277,20 @@ class MessagesManager final : public Actor {
 
   struct UploadedFileInfo {
     MessageFullId message_full_id;
-    FileId thumbnail_file_id;
     int32 media_pos;
   };
-  FlatHashMap<FileId, UploadedFileInfo, FileIdHash> being_uploaded_files_;
+  FlatHashMap<FileUploadId, UploadedFileInfo, FileUploadIdHash> being_uploaded_files_;
   struct UploadedThumbnailInfo {
     MessageFullId message_full_id;
-    FileId file_id;                                     // original file file_id
-    tl_object_ptr<telegram_api::InputFile> input_file;  // original file InputFile
+    telegram_api::object_ptr<telegram_api::InputFile> input_file;  // original file InputFile
     int32 media_pos;
   };
-  FlatHashMap<FileId, UploadedThumbnailInfo, FileIdHash> being_uploaded_thumbnails_;  // thumbnail_file_id -> ...
+  FlatHashMap<FileUploadId, UploadedThumbnailInfo, FileUploadIdHash> being_uploaded_thumbnails_;
   struct UploadedSecretThumbnailInfo {
     MessageFullId message_full_id;
-    FileId file_id;                                              // original file file_id
-    tl_object_ptr<telegram_api::InputEncryptedFile> input_file;  // original file InputEncryptedFile
+    telegram_api::object_ptr<telegram_api::InputEncryptedFile> input_file;  // original file InputEncryptedFile
   };
-  FlatHashMap<FileId, UploadedSecretThumbnailInfo, FileIdHash>
-      being_loaded_secret_thumbnails_;  // thumbnail_file_id -> ...
+  FlatHashMap<FileUploadId, UploadedSecretThumbnailInfo, FileUploadIdHash> being_loaded_secret_thumbnails_;
 
   // TTL
   class TtlNode final : private HeapNode {
@@ -3281,7 +3333,10 @@ class MessagesManager final : public Actor {
   FlatHashMap<MessageFullId, MessageId, MessageFullIdHash> update_message_ids_;  // new_message_id -> temporary_id
   FlatHashMap<DialogId, FlatHashMap<ScheduledServerMessageId, MessageId, ScheduledServerMessageIdHash>,
               DialogIdHash>
-      update_scheduled_message_ids_;  // new_message_id -> temporary_id
+      update_scheduled_message_ids_;                                              // new_message_id -> temporary_id
+  FlatHashMap<MessageFullId, MessageId, MessageFullIdHash> messages_to_restore_;  // new_message_id -> temporary_id
+
+  FlatHashSet<MessageFullId, MessageFullIdHash> published_video_message_full_ids_;
 
   const char *debug_add_message_to_dialog_fail_reason_ = "";
 
@@ -3406,6 +3461,7 @@ class MessagesManager final : public Actor {
   MultiTimeout send_update_chat_read_inbox_timeout_{"SendUpdateChatReadInboxTimeout"};
 
   Timeout live_location_expire_timeout_;
+  Timeout restore_missing_messages_timeout_;
 
   Hints dialogs_hints_;  // search dialogs by title and usernames
 
@@ -3436,7 +3492,7 @@ class MessagesManager final : public Actor {
   };
 
   vector<PendingOnGetDialogs> pending_on_get_dialogs_;
-  FlatHashMap<DialogId, PendingOnGetDialogs, DialogIdHash> pending_channel_on_get_dialogs_;
+  FlatHashMap<DialogId, vector<PendingOnGetDialogs>, DialogIdHash> pending_channel_on_get_dialogs_;
 
   FlatHashMap<DialogId, vector<Promise<Unit>>, DialogIdHash> run_after_get_channel_difference_;
 
@@ -3514,6 +3570,11 @@ class MessagesManager final : public Actor {
   FlatHashMap<DialogId, std::pair<bool, bool>, DialogIdHash> pending_dialog_group_call_updates_;
 
   FlatHashMap<string, int32> auth_notification_id_date_;
+
+  FlatHashMap<MessageFullId, unique_ptr<EditedMessage>, MessageFullIdHash> edited_messages_;
+  FlatHashMap<DialogId, FlatHashMap<ScheduledServerMessageId, unique_ptr<EditedMessage>, ScheduledServerMessageIdHash>,
+              DialogIdHash>
+      edited_scheduled_messages_;
 
   FlatHashMap<DialogId, MessageId, DialogIdHash> previous_repaired_read_inbox_max_message_id_;
 

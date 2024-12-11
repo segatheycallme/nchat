@@ -41,7 +41,7 @@
 
 // #define SIMULATED_SPONSORED_MESSAGES
 
-static const int s_TdlibDate = 20240906;
+static const int s_TdlibDate = 20241117;
 
 namespace detail
 {
@@ -2356,7 +2356,28 @@ void TgChat::Impl::TdMessageContentConvert(td::td_api::MessageContent& p_TdMessa
   }
   else if (p_TdMessageContent.get_id() == td::td_api::messageAnimation::ID)
   {
-    p_Text = "[Animation]";
+    auto& messageAnimation = static_cast<td::td_api::messageAnimation&>(p_TdMessageContent);
+    auto& animation = messageAnimation.animation_;
+    p_Text = GetText(std::move(messageAnimation.caption_));
+
+    auto& animationFile = animation->animation_;
+    auto& localFile = animationFile->local_;
+    auto& localPath = localFile->path_;
+    FileInfo fileInfo;
+    std::string id = animationFile->remote_->id_;
+    fileInfo.fileId = id;
+    if (!localPath.empty())
+    {
+      fileInfo.filePath = localPath;
+      fileInfo.fileStatus = FileStatusDownloaded;
+    }
+    else
+    {
+      fileInfo.filePath = "[Animation]";
+      fileInfo.fileStatus = FileStatusNotDownloaded;
+    }
+
+    p_FileInfo = ProtocolUtil::FileInfoToHex(fileInfo);
   }
   else if (p_TdMessageContent.get_id() == td::td_api::messageAudio::ID)
   {
