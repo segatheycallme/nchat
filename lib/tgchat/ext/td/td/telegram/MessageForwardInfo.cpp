@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -242,17 +242,6 @@ bool operator==(const MessageForwardInfo &lhs, const MessageForwardInfo &rhs) {
 }
 
 bool operator!=(const MessageForwardInfo &lhs, const MessageForwardInfo &rhs) {
-  return !(lhs == rhs);
-}
-
-bool operator==(const unique_ptr<MessageForwardInfo> &lhs, const unique_ptr<MessageForwardInfo> &rhs) {
-  if (lhs == nullptr) {
-    return rhs == nullptr;
-  }
-  return rhs != nullptr && *lhs == *rhs;
-}
-
-bool operator!=(const unique_ptr<MessageForwardInfo> &lhs, const unique_ptr<MessageForwardInfo> &rhs) {
   return !(lhs == rhs);
 }
 

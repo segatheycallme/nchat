@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -368,6 +368,16 @@ void fail_promises(vector<Promise<T>> &promises, Status &&error) {
     }
   }
   moved_promises[size].set_error(std::move(error));
+}
+
+template <class T>
+void fail_promise_map(T &promise_map, Status &&error) {
+  while (!promise_map.empty()) {
+    auto it = promise_map.begin();
+    auto promises = std::move(it->second);
+    promise_map.erase(it);
+    fail_promises(promises, error.clone());
+  }
 }
 
 }  // namespace td

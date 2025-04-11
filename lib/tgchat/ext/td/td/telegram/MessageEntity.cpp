@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -19,7 +19,6 @@
 #include "td/actor/MultiPromise.h"
 
 #include "td/utils/algorithm.h"
-#include "td/utils/format.h"
 #include "td/utils/HashTableUtils.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
@@ -4235,7 +4234,7 @@ static std::pair<size_t, int32> remove_invalid_entities(const string &text, vect
   return {last_non_whitespace_pos, last_non_whitespace_utf16_offset};
 }
 
-// enitities must contain only splittable entities
+// entities must contain only splittable entities
 static void split_entities(vector<MessageEntity> &entities, const vector<MessageEntity> &other_entities) {
   check_is_sorted(entities);
   check_is_sorted(other_entities);
@@ -4494,8 +4493,12 @@ Status fix_formatted_text(string &text, vector<MessageEntity> &entities, bool al
   }
   LOG_CHECK(check_utf8(text)) << text;
 
-  if (!allow_empty && is_empty_string(text)) {
-    return Status::Error(400, "Text must be non-empty");
+  if (is_empty_string(text)) {
+    if (!allow_empty) {
+      return Status::Error(400, "Text must be non-empty");
+    }
+    text.clear();
+    entities.clear();
   }
 
   constexpr size_t LENGTH_LIMIT = 35000;  // server side limit
@@ -4533,7 +4536,7 @@ FormattedText get_message_text(const UserManager *user_manager, string message_t
     if (!from_album && (send_date == 0 || send_date > 1600340000)) {  // approximate fix date
       LOG(ERROR) << "Receive error " << status << " while parsing message text from " << source << " sent at "
                  << send_date << " with content \"" << debug_message_text << "\" -> \"" << message_text
-                 << "\" with entities " << format::as_array(debug_entities) << " -> " << format::as_array(entities);
+                 << "\" with entities " << debug_entities << " -> " << entities;
     }
     if (!clean_input_string(message_text)) {
       message_text.clear();
@@ -4750,6 +4753,11 @@ vector<tl_object_ptr<telegram_api::MessageEntity>> get_input_message_entities(co
     return get_input_message_entities(user_manager, text->entities, source);
   }
   return {};
+}
+
+void keep_only_custom_emoji(FormattedText &text) {
+  td::remove_if(text.entities,
+                [&](const MessageEntity &entity) { return entity.type != MessageEntity::Type::CustomEmoji; });
 }
 
 void remove_premium_custom_emoji_entities(const Td *td, vector<MessageEntity> &entities, bool remove_unknown) {

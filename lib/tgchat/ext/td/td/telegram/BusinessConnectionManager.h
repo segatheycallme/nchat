@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -185,6 +185,11 @@ class BusinessConnectionManager final : public Actor {
 
   int64 generate_new_media_album_id();
 
+  void do_send_message_album(int64 request_id, BusinessConnectionId business_connection_id, DialogId dialog_id,
+                             MessageInputReplyTo &&input_reply_to, bool disable_notification, bool protect_content,
+                             MessageEffectId effect_id, vector<InputMessageContent> &&message_contents,
+                             Promise<td_api::object_ptr<td_api::businessMessages>> &&promise);
+
   void on_upload_message_album_media(int64 request_id, size_t media_pos, Result<UploadMediaResult> &&result);
 
   void process_sent_business_message_album(telegram_api::object_ptr<telegram_api::Updates> &&updates_ptr,
@@ -193,6 +198,9 @@ class BusinessConnectionManager final : public Actor {
   void on_upload_message_paid_media(int64 request_id, size_t media_pos, Result<UploadMediaResult> &&result);
 
   void on_fail_send_message(unique_ptr<PendingMessage> &&message, const Status &error);
+
+  void do_edit_message_media(unique_ptr<PendingMessage> &&message,
+                             Promise<td_api::object_ptr<td_api::businessMessage>> &&promise);
 
   void do_edit_business_message_media(Result<UploadMediaResult> &&result,
                                       Promise<td_api::object_ptr<td_api::businessMessage>> &&promise);

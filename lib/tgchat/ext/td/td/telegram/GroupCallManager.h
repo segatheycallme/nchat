@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -39,6 +39,8 @@ class GroupCallManager final : public Actor {
   GroupCallManager &operator=(GroupCallManager &&) = delete;
   ~GroupCallManager() final;
 
+  Result<InputGroupCallId> get_input_group_call_id(GroupCallId group_call_id);
+
   bool is_group_call_being_joined(InputGroupCallId input_group_call_id) const;
 
   bool is_group_call_joined(InputGroupCallId input_group_call_id) const;
@@ -72,7 +74,8 @@ class GroupCallManager final : public Actor {
   void start_scheduled_group_call(GroupCallId group_call_id, Promise<Unit> &&promise);
 
   void join_group_call(GroupCallId group_call_id, DialogId as_dialog_id, int32 audio_source, string &&payload,
-                       bool is_muted, bool is_my_video_enabled, const string &invite_hash, Promise<string> &&promise);
+                       bool is_muted, bool is_my_video_enabled, const string &invite_hash, int64 key_fingerprint,
+                       Promise<string> &&promise);
 
   void start_group_call_screen_sharing(GroupCallId group_call_id, int32 audio_source, string &&payload,
                                        Promise<string> &&promise);
@@ -178,8 +181,6 @@ class GroupCallManager final : public Actor {
   static void on_sync_participants_timeout_callback(void *group_call_manager_ptr, int64 group_call_id_int);
 
   void on_sync_participants_timeout(GroupCallId group_call_id);
-
-  Result<InputGroupCallId> get_input_group_call_id(GroupCallId group_call_id);
 
   GroupCallId get_next_group_call_id(InputGroupCallId input_group_call_id);
 

@@ -53,7 +53,7 @@ Interactive Commands:
     Ctrl-f      jump to unread chat
     Ctrl-g      toggle show help bar
     Ctrl-l      toggle show contact list
-    Ctrl-n      search contacts
+    Ctrl-n      goto chat
     Ctrl-p      toggle show top bar
     Ctrl-q      quit
     Ctrl-s      insert emoji
@@ -63,7 +63,7 @@ Interactive Commands:
     KeyUp       select message
     Alt-d       delete/leave current chat
     Alt-e       external editor compose
-    Alt-n       goto chat
+    Alt-n       search contacts
     Alt-t       external telephone call
     Alt-/       find in chat
     Alt-?       find next in chat
@@ -389,6 +389,7 @@ This configuration file holds general user interface settings. Default content:
     top_show_version=0
     transfer_send_caption=1
     typing_status_share=1
+    unread_indicator=*
 
 ### attachment_indicator
 
@@ -647,6 +648,10 @@ Specifies if entered text should be sent as caption when transferring a file.
 Specifies whether to share typing status with other user(s) in the
 conversation.
 
+### unread_indicator
+
+Specifies the character to suffix chats with unread messages in the chat list.
+
 ~/.config/nchat/key.conf
 ------------------------
 This configuration file holds user interface key bindings. Default content:
@@ -676,7 +681,7 @@ This configuration file holds user interface key bindings. Default content:
     find_next=\33\77
     forward_msg=\33\162
     forward_word=
-    goto_chat=\33\156
+    goto_chat=KEY_CTRLN
     home=KEY_HOME
     increase_list_width=\33\56
     jump_quoted=\33\161
@@ -697,7 +702,7 @@ This configuration file holds user interface key bindings. Default content:
     react=\33\163
     right=KEY_RIGHT
     save=KEY_CTRLR
-    select_contact=KEY_CTRLN
+    select_contact=\33\156
     select_emoji=KEY_CTRLS
     send_msg=KEY_CTRLX
     spell=\33\44
@@ -1038,6 +1043,11 @@ There are no plans to support the following features:
 - Telegram secret chats
 - Voice / video calls
 
+Additionally, WhatsApp is only supported on macOS and glibc-based Linux
+systems. Thus, it is not supported on musl-based operating systems, such
+as Alpine Linux. See [issue #204](https://github.com/d99kris/nchat/issues/204)
+for technical details on this limitation.
+
 Roadmap
 -------
 There is currently no concrete roadmap for further feature development of
@@ -1057,13 +1067,6 @@ Contributions
 =============
 Please refer to [Contributing Guidelines](/doc/CONTRIBUTING.md) and
 [Design Notes](/doc/DESIGN.md).
-
-
-Alternatives
-============
-Other terminal-based Telegram clients:
-
-- [tg](https://github.com/paul-nameless/tg)
 
 
 Keywords

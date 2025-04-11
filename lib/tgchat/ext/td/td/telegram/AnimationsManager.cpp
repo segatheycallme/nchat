@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -290,8 +290,8 @@ tl_object_ptr<telegram_api::InputMedia> AnimationsManager::get_input_media(
     if (has_spoiler) {
       flags |= telegram_api::inputMediaDocument::SPOILER_MASK;
     }
-    return make_tl_object<telegram_api::inputMediaDocument>(flags, false /*ignored*/,
-                                                            main_remote_location->as_input_document(), 0, string());
+    return telegram_api::make_object<telegram_api::inputMediaDocument>(
+        flags, false /*ignored*/, main_remote_location->as_input_document(), nullptr, 0, 0, string());
   }
   const auto *url = file_view.get_url();
   if (url != nullptr) {
@@ -299,7 +299,8 @@ tl_object_ptr<telegram_api::InputMedia> AnimationsManager::get_input_media(
     if (has_spoiler) {
       flags |= telegram_api::inputMediaDocumentExternal::SPOILER_MASK;
     }
-    return make_tl_object<telegram_api::inputMediaDocumentExternal>(flags, false /*ignored*/, *url, 0);
+    return telegram_api::make_object<telegram_api::inputMediaDocumentExternal>(flags, false /*ignored*/, *url, 0,
+                                                                               nullptr, 0);
   }
 
   if (input_file != nullptr) {
@@ -334,9 +335,9 @@ tl_object_ptr<telegram_api::InputMedia> AnimationsManager::get_input_media(
     if (has_spoiler) {
       flags |= telegram_api::inputMediaUploadedDocument::SPOILER_MASK;
     }
-    return make_tl_object<telegram_api::inputMediaUploadedDocument>(
+    return telegram_api::make_object<telegram_api::inputMediaUploadedDocument>(
         flags, false /*ignored*/, false /*ignored*/, false /*ignored*/, std::move(input_file),
-        std::move(input_thumbnail), mime_type, std::move(attributes), std::move(added_stickers), 0);
+        std::move(input_thumbnail), mime_type, std::move(attributes), std::move(added_stickers), nullptr, 0, 0);
   } else {
     CHECK(main_remote_location == nullptr);
   }
@@ -592,8 +593,8 @@ void AnimationsManager::on_get_saved_animations(
       continue;
     }
     CHECK(document_constructor_id == telegram_api::document::ID);
-    auto document =
-        td_->documents_manager_->on_get_document(move_tl_object_as<telegram_api::document>(document_ptr), DialogId());
+    auto document = td_->documents_manager_->on_get_document(move_tl_object_as<telegram_api::document>(document_ptr),
+                                                             DialogId(), false);
     if (document.type != Document::Type::Animation) {
       LOG(ERROR) << "Receive " << document << " instead of animation as saved animation";
       continue;

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -48,19 +48,9 @@ td_api::object_ptr<td_api::factCheck> FactCheck::get_fact_check_object(const Use
                                                 country_code_);
 }
 
-bool operator==(const unique_ptr<FactCheck> &lhs, const unique_ptr<FactCheck> &rhs) {
-  if (lhs == nullptr) {
-    return rhs == nullptr;
-  }
-  if (rhs == nullptr) {
-    return false;
-  }
-  return lhs->country_code_ == rhs->country_code_ && lhs->text_ == rhs->text_ && lhs->hash_ == rhs->hash_ &&
-         lhs->need_check_ == rhs->need_check_;
-}
-
-bool operator!=(const unique_ptr<FactCheck> &lhs, const unique_ptr<FactCheck> &rhs) {
-  return !(lhs == rhs);
+bool operator==(const FactCheck &lhs, const FactCheck &rhs) {
+  return lhs.country_code_ == rhs.country_code_ && lhs.text_ == rhs.text_ && lhs.hash_ == rhs.hash_ &&
+         lhs.need_check_ == rhs.need_check_;
 }
 
 }  // namespace td

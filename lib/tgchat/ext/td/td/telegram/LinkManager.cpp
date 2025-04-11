@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -129,6 +129,13 @@ static string get_url_query_draft_text(const HttpUrlQuery &url_query) {
     return ' ' + text;
   }
   return text;
+}
+
+static vector<string> get_referral_program_start_parameter_prefixes() {
+  if (Scheduler::context() != nullptr) {
+    return full_split(G()->get_option_string("starref_start_param_prefixes", "_tgr_"), ' ');
+  }
+  return vector<string>{"_tgr_"};
 }
 
 static AdministratorRights get_administrator_rights(Slice rights, bool for_channel) {
@@ -362,8 +369,7 @@ class LinkManager::InternalLinkBotStart final : public InternalLink {
       } else {
         const Td *td = G()->td().get_actor_unsafe();
         auto dialog_id = td->dialog_manager_->get_resolved_dialog_by_username(bot_username_);
-        if (dialog_id.is_valid() && dialog_id.get_type() == DialogType::User &&
-            td->messages_manager_->get_dialog_has_last_message(dialog_id) &&
+        if (dialog_id.get_type() == DialogType::User && td->messages_manager_->get_dialog_has_last_message(dialog_id) &&
             !td->messages_manager_->is_dialog_blocked(dialog_id)) {
           autostart = true;
         }
@@ -483,6 +489,20 @@ class LinkManager::InternalLinkDialogInvite final : public InternalLink {
 
  public:
   explicit InternalLinkDialogInvite(string url) : url_(std::move(url)) {
+  }
+};
+
+class LinkManager::InternalLinkDialogReferralProgram final : public InternalLink {
+  string username_;
+  string referral_;
+
+  td_api::object_ptr<td_api::InternalLinkType> get_internal_link_type_object() const final {
+    return td_api::make_object<td_api::internalLinkTypeChatAffiliateProgram>(username_, referral_);
+  }
+
+ public:
+  InternalLinkDialogReferralProgram(string username, string referral)
+      : username_(std::move(username)), referral_(std::move(referral)) {
   }
 };
 
@@ -807,6 +827,18 @@ class LinkManager::InternalLinkUserPhoneNumber final : public InternalLink {
       : phone_number_(PSTRING() << '+' << phone_number)
       , draft_text_(std::move(draft_text))
       , open_profile_(open_profile) {
+  }
+};
+
+class LinkManager::InternalLinkUpgradedGift final : public InternalLink {
+  string name_;
+
+  td_api::object_ptr<td_api::InternalLinkType> get_internal_link_type_object() const final {
+    return td_api::make_object<td_api::internalLinkTypeUpgradedGift>(name_);
+  }
+
+ public:
+  explicit InternalLinkUpgradedGift(string name) : name_(std::move(name)) {
   }
 };
 
@@ -1272,9 +1304,9 @@ LinkManager::LinkInfo LinkManager::get_link_info(Slice link) {
     if (ends_with(host, ".t.me") && host.size() >= 9 && host.find('.') == host.size() - 5) {
       Slice subdomain(&host[0], host.size() - 5);
       static const FlatHashSet<Slice, SliceHash> disallowed_subdomains(
-          {"addemoji",    "addlist",  "addstickers", "addtheme", "auth",  "boost", "confirmphone",
-           "contact",     "giftcode", "invoice",     "joinchat", "login", "m",     "proxy",
-           "setlanguage", "share",    "socks",       "web",      "a",     "k",     "z"});
+          {"addemoji", "addlist", "addstickers", "addtheme", "auth", "boost", "confirmphone", "contact",
+           "giftcode", "invoice", "joinchat",    "login",    "m",    "nft",   "proxy",        "setlanguage",
+           "share",    "socks",   "web",         "a",        "k",    "z"});
       if (is_valid_username(subdomain) && disallowed_subdomains.count(subdomain) == 0) {
         result.type_ = LinkType::TMe;
         result.query_ = PSTRING() << '/' << subdomain << http_url.query_;
@@ -1425,7 +1457,19 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_tg_link_query(Slice que
           }
           return td::make_unique<InternalLinkVoiceChat>(std::move(username), arg.second, arg.first == "livestream");
         }
+        if (arg.first == "ref" && is_valid_start_parameter(arg.second) && !arg.second.empty()) {
+          // resolve?domain=<bot_username>&ref=<referrer>
+          return td::make_unique<InternalLinkDialogReferralProgram>(std::move(username), std::move(arg.second));
+        }
         if (arg.first == "start" && is_valid_start_parameter(arg.second)) {
+          auto prefixes = get_referral_program_start_parameter_prefixes();
+          for (Slice prefix : prefixes) {
+            if (begins_with(arg.second, prefix) && arg.second.size() > prefix.size()) {
+              // resolve?domain=<bot_username>&start=_tgr_<referrer>
+              return td::make_unique<InternalLinkDialogReferralProgram>(std::move(username),
+                                                                        arg.second.substr(prefix.size()));
+            }
+          }
           // resolve?domain=<bot_username>&start=<parameter>
           return td::make_unique<InternalLinkBotStart>(std::move(username), arg.second, is_trusted);
         }
@@ -1502,6 +1546,11 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_tg_link_query(Slice que
         return td::make_unique<InternalLinkUserPhoneNumber>(phone_number, get_url_query_draft_text(url_query),
                                                             url_query.has_arg("profile"));
       }
+    }
+  } else if (path.size() == 1 && path[0] == "nft") {
+    // nft?slug=<slug>
+    if (has_arg("slug")) {
+      return td::make_unique<InternalLinkUpgradedGift>(get_arg("slug"));
     }
   } else if (path.size() == 1 && path[0] == "contact") {
     // contact?token=<token>
@@ -1757,6 +1806,16 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_t_me_link_query(Slice q
       // /+<link>
       return td::make_unique<InternalLinkDialogInvite>(get_dialog_invite_link(invite_hash, true));
     }
+  } else if (path[0] == "nft") {
+    if (path.size() >= 2 && !path[1].empty()) {
+      // /nft/<slug>
+      string name = path[1];
+      for (std::size_t i = 2; i < path.size(); i++) {
+        name += '/';
+        name += path[i];
+      }
+      return td::make_unique<InternalLinkUpgradedGift>(name);
+    }
   } else if (path[0] == "contact") {
     if (path.size() >= 2 && !path[1].empty()) {
       // /contact/<token>
@@ -1903,7 +1962,19 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_t_me_link_query(Slice q
         // /<username>?boost
         return td::make_unique<InternalLinkDialogBoost>(PSTRING() << "tg://boost?domain=" << url_encode(username));
       }
+      if (arg.first == "ref" && is_valid_start_parameter(arg.second) && !arg.second.empty()) {
+        // /<bot_username>?ref=<referrer>
+        return td::make_unique<InternalLinkDialogReferralProgram>(std::move(username), std::move(arg.second));
+      }
       if (arg.first == "start" && is_valid_start_parameter(arg.second)) {
+        auto prefixes = get_referral_program_start_parameter_prefixes();
+        for (Slice prefix : prefixes) {
+          if (begins_with(arg.second, prefix) && arg.second.size() > prefix.size()) {
+            // /<bot_username>?start=_tgr_<referrer>
+            return td::make_unique<InternalLinkDialogReferralProgram>(std::move(username),
+                                                                      arg.second.substr(prefix.size()));
+          }
+        }
         // /<bot_username>?start=<parameter>
         return td::make_unique<InternalLinkBotStart>(std::move(username), arg.second, is_trusted);
       }
@@ -2244,6 +2315,22 @@ Result<string> LinkManager::get_internal_link_impl(const td_api::InternalLinkTyp
         return Status::Error("HTTP link is unavailable for the link type");
       }
       return "tg://settings/change_number";
+    case td_api::internalLinkTypeChatAffiliateProgram::ID: {
+      auto link = static_cast<const td_api::internalLinkTypeChatAffiliateProgram *>(type_ptr);
+      if (!is_valid_username(link->username_)) {
+        return Status::Error(400, "Invalid username specified");
+      }
+      if (!is_valid_start_parameter(link->referrer_) || link->referrer_.empty()) {
+        return Status::Error(400, "Invalid referrer specified");
+      }
+      auto start_parameter = PSTRING() << "start=" << get_referral_program_start_parameter_prefixes()[0]
+                                       << link->referrer_;
+      if (is_internal) {
+        return PSTRING() << "tg://resolve?domain=" << link->username_ << "&" << start_parameter;
+      } else {
+        return PSTRING() << get_t_me_url() << link->username_ << "?" << start_parameter;
+      }
+    }
     case td_api::internalLinkTypeChatBoost::ID: {
       auto link = static_cast<const td_api::internalLinkTypeChatBoost *>(type_ptr);
       auto parsed_link = parse_internal_link(link->url_);
@@ -2560,6 +2647,17 @@ Result<string> LinkManager::get_internal_link_impl(const td_api::InternalLinkTyp
       } else {
         return PSTRING() << get_t_me_url() << "proxy?port=-1&server=0.0.0.0";
       }
+    case td_api::internalLinkTypeUpgradedGift::ID: {
+      auto link = static_cast<const td_api::internalLinkTypeUpgradedGift *>(type_ptr);
+      if (link->name_.empty()) {
+        return Status::Error(400, "Invalid gift name specified");
+      }
+      if (is_internal) {
+        return PSTRING() << "tg://nft?slug=" << link->name_;
+      } else {
+        return PSTRING() << get_t_me_url() << "nft/" << link->name_;
+      }
+    }
     case td_api::internalLinkTypeUserPhoneNumber::ID: {
       auto link = static_cast<const td_api::internalLinkTypeUserPhoneNumber *>(type_ptr);
       string phone_number;

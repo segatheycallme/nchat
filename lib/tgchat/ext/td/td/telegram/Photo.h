@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -143,6 +143,10 @@ SecretInputMedia photo_get_secret_input_media(FileManager *file_manager, const P
 tl_object_ptr<telegram_api::InputMedia> photo_get_input_media(
     FileManager *file_manager, const Photo &photo, telegram_api::object_ptr<telegram_api::InputFile> input_file,
     int32 ttl, bool has_spoiler);
+
+telegram_api::object_ptr<telegram_api::InputMedia> photo_get_cover_input_media(FileManager *file_manager,
+                                                                               const Photo &photo, bool force,
+                                                                               bool allow_external);
 
 vector<FileId> photo_get_file_ids(const Photo &photo);
 

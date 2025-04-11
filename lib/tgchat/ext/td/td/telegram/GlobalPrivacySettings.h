@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -24,6 +24,7 @@ class GlobalPrivacySettings {
   bool keep_archived_folders_ = false;
   bool hide_read_marks_ = false;
   bool new_noncontact_peers_require_premium_ = false;
+  int64 noncontact_peers_paid_star_count_ = 0;
 
   void apply_changes(const GlobalPrivacySettings &set_settings);
 

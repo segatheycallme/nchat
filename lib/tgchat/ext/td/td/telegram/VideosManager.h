@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,6 +8,7 @@
 
 #include "td/telegram/Dimensions.h"
 #include "td/telegram/files/FileId.h"
+#include "td/telegram/Photo.h"
 #include "td/telegram/PhotoSize.h"
 #include "td/telegram/SecretInputMedia.h"
 #include "td/telegram/td_api.h"
@@ -46,7 +47,8 @@ class VideosManager {
 
   tl_object_ptr<telegram_api::InputMedia> get_input_media(
       FileId file_id, telegram_api::object_ptr<telegram_api::InputFile> input_file,
-      telegram_api::object_ptr<telegram_api::InputFile> input_thumbnail, int32 ttl, bool has_spoiler) const;
+      telegram_api::object_ptr<telegram_api::InputFile> input_thumbnail, const Photo &cover, int32 start_timestamp,
+      int32 ttl, bool has_spoiler) const;
 
   telegram_api::object_ptr<telegram_api::InputMedia> get_story_document_input_media(FileId file_id,
                                                                                     double main_frame_timestamp) const;

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -11,13 +11,13 @@
 #include "td/telegram/Birthdate.h"
 #include "td/telegram/BotCommand.h"
 #include "td/telegram/BotMenuButton.h"
+#include "td/telegram/BotVerifierSettings.h"
 #include "td/telegram/ChannelId.h"
 #include "td/telegram/Contact.h"
 #include "td/telegram/CustomEmojiId.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogLocation.h"
 #include "td/telegram/DialogParticipant.h"
-#include "td/telegram/EmojiStatus.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
 #include "td/telegram/files/FileUploadId.h"
@@ -26,6 +26,7 @@
 #include "td/telegram/Photo.h"
 #include "td/telegram/QueryCombiner.h"
 #include "td/telegram/QueryMerger.h"
+#include "td/telegram/ReferralProgramInfo.h"
 #include "td/telegram/RestrictionReason.h"
 #include "td/telegram/SecretChatId.h"
 #include "td/telegram/StoryId.h"
@@ -57,11 +58,13 @@
 namespace td {
 
 struct BinlogEvent;
+class BotVerification;
 class BusinessAwayMessage;
 class BusinessGreetingMessage;
 class BusinessInfo;
 class BusinessIntro;
 class BusinessWorkHours;
+class EmojiStatus;
 class Td;
 
 class UserManager final : public Actor {
@@ -74,6 +77,8 @@ class UserManager final : public Actor {
   ~UserManager() final;
 
   static UserId get_user_id(const telegram_api::object_ptr<telegram_api::User> &user);
+
+  vector<UserId> get_user_ids(vector<telegram_api::object_ptr<telegram_api::User>> &&users, const char *source);
 
   static UserId load_my_id();
 
@@ -157,7 +162,13 @@ class UserManager final : public Actor {
   void on_update_user_commands(UserId user_id,
                                vector<telegram_api::object_ptr<telegram_api::botCommand>> &&bot_commands);
 
+  void on_update_user_referral_program_info(UserId user_id, ReferralProgramInfo &&referral_program_info);
+
+  void on_update_user_verifier_settings(UserId user_id, unique_ptr<BotVerifierSettings> &&verifier_settings);
+
   void on_update_user_need_phone_number_privacy_exception(UserId user_id, bool need_phone_number_privacy_exception);
+
+  void on_update_user_charge_paid_message_stars(UserId user_id, int64 charge_paid_message_stars);
 
   void on_update_user_wallpaper_overridden(UserId user_id, bool wallpaper_overridden);
 
@@ -341,9 +352,9 @@ class UserManager final : public Actor {
 
   void toggle_user_can_manage_emoji_status(UserId user_id, bool can_manage_emoji_status, Promise<Unit> &&promise);
 
-  void set_user_emoji_status(UserId user_id, const EmojiStatus &emoji_status, Promise<Unit> &&promise);
+  void set_user_emoji_status(UserId user_id, const unique_ptr<EmojiStatus> &emoji_status, Promise<Unit> &&promise);
 
-  void on_set_user_emoji_status(UserId user_id, EmojiStatus emoji_status, Promise<Unit> &&promise);
+  void on_set_user_emoji_status(UserId user_id, unique_ptr<EmojiStatus> emoji_status, Promise<Unit> &&promise);
 
   void set_username(const string &username, Promise<Unit> &&promise);
 
@@ -372,7 +383,7 @@ class UserManager final : public Actor {
 
   void set_personal_channel(DialogId dialog_id, Promise<Unit> &&promise);
 
-  void set_emoji_status(const EmojiStatus &emoji_status, Promise<Unit> &&promise);
+  void set_emoji_status(const unique_ptr<EmojiStatus> &emoji_status, Promise<Unit> &&promise);
 
   void toggle_sponsored_messages(bool sponsored_enabled, Promise<Unit> &&promise);
 
@@ -395,8 +406,9 @@ class UserManager final : public Actor {
   void can_send_message_to_user(UserId user_id, bool force,
                                 Promise<td_api::object_ptr<td_api::CanSendMessageToUserResult>> &&promise);
 
-  void on_get_is_premium_required_to_contact_users(vector<UserId> &&user_ids, vector<bool> &&is_premium_required,
-                                                   Promise<Unit> &&promise);
+  void on_get_is_premium_required_to_contact_users(
+      vector<UserId> &&user_ids, vector<telegram_api::object_ptr<telegram_api::RequirementToContact>> &&requirements,
+      Promise<Unit> &&promise);
 
   void allow_send_message_to_user(UserId user_id);
 
@@ -495,8 +507,8 @@ class UserManager final : public Actor {
     Usernames usernames;
     string phone_number;
     int64 access_hash = -1;
-    EmojiStatus emoji_status;
-    EmojiStatus last_sent_emoji_status;
+    unique_ptr<EmojiStatus> emoji_status;
+    unique_ptr<EmojiStatus> last_sent_emoji_status;
 
     ProfilePhoto photo;
 
@@ -504,6 +516,8 @@ class UserManager final : public Actor {
     string inline_query_placeholder;
     int32 bot_active_users = 0;
     int32 bot_info_version = -1;
+
+    CustomEmojiId bot_verification_icon;
 
     AccentColorId accent_color_id;
     CustomEmojiId background_custom_emoji_id;
@@ -516,6 +530,8 @@ class UserManager final : public Actor {
     double max_active_story_id_next_reload_time = 0.0;
     StoryId max_active_story_id;
     StoryId max_read_story_id;
+
+    int64 paid_message_star_count = 0;
 
     string language_code;
 
@@ -597,6 +613,8 @@ class UserManager final : public Actor {
     string privacy_policy_url;
     AdministratorRights group_administrator_rights;
     AdministratorRights broadcast_administrator_rights;
+    ReferralProgramInfo referral_program_info;
+    unique_ptr<BotVerifierSettings> verifier_settings;
 
     string placeholder_path;
     int32 background_color = -1;
@@ -624,6 +642,10 @@ class UserManager final : public Actor {
 
     unique_ptr<BotInfo> bot_info;
     unique_ptr<BusinessInfo> business_info;
+    unique_ptr<BotVerification> bot_verification;
+
+    int64 charge_paid_message_stars = 0;
+    int64 send_paid_message_stars = 0;
 
     bool is_blocked = false;
     bool is_blocked_for_stories = false;
@@ -840,13 +862,15 @@ class UserManager final : public Actor {
   void on_update_user_profile_background_custom_emoji_id(User *u, UserId user_id,
                                                          CustomEmojiId background_custom_emoji_id);
 
-  void on_update_user_emoji_status(User *u, UserId user_id, EmojiStatus emoji_status);
+  void on_update_user_emoji_status(User *u, UserId user_id, unique_ptr<EmojiStatus> emoji_status);
 
   void on_update_user_story_ids_impl(User *u, UserId user_id, StoryId max_active_story_id, StoryId max_read_story_id);
 
   void on_update_user_max_read_story_id(User *u, UserId user_id, StoryId max_read_story_id);
 
   void on_update_user_stories_hidden(User *u, UserId user_id, bool stories_hidden);
+
+  void on_update_user_bot_verification_icon(User *u, UserId user_id, CustomEmojiId bot_verification_icon);
 
   void on_update_user_is_contact(User *u, UserId user_id, bool is_contact, bool is_mutual_contact,
                                  bool is_close_friend);
@@ -876,8 +900,20 @@ class UserManager final : public Actor {
   static void on_update_user_full_commands(UserFull *user_full, UserId user_id,
                                            vector<telegram_api::object_ptr<telegram_api::botCommand>> &&bot_commands);
 
+  void on_update_user_full_referral_program_info(UserFull *user_full, UserId user_id,
+                                                 ReferralProgramInfo &&referral_program_info);
+
+  void on_update_user_full_verifier_settings(UserFull *user_full, UserId user_id,
+                                             unique_ptr<BotVerifierSettings> &&verifier_settings);
+
   void on_update_user_full_need_phone_number_privacy_exception(UserFull *user_full, UserId user_id,
                                                                bool need_phone_number_privacy_exception) const;
+
+  void on_update_user_full_charge_paid_message_stars(UserFull *user_full, UserId user_id,
+                                                     int64 charge_paid_message_stars) const;
+
+  void on_update_user_full_send_paid_message_stars(UserFull *user_full, UserId user_id,
+                                                   int64 send_paid_message_stars) const;
 
   void on_update_user_full_wallpaper_overridden(UserFull *user_full, UserId user_id, bool wallpaper_overridden) const;
 
@@ -921,7 +957,7 @@ class UserManager final : public Actor {
 
   void on_set_personal_channel(ChannelId channel_id, Promise<Unit> &&promise);
 
-  void on_set_emoji_status(EmojiStatus emoji_status, Promise<Unit> &&promise);
+  void on_set_emoji_status(unique_ptr<EmojiStatus> emoji_status, Promise<Unit> &&promise);
 
   void on_toggle_sponsored_messages(bool sponsored_enabled, Promise<Unit> &&promise);
 
@@ -1146,7 +1182,7 @@ class UserManager final : public Actor {
   bool are_imported_contacts_changing_ = false;
   bool need_clear_imported_contacts_ = false;
 
-  FlatHashMap<UserId, bool, UserIdHash> user_full_contact_require_premium_;
+  FlatHashMap<UserId, int64, UserIdHash> user_full_contact_price_;  // -1 - premium required
 
   WaitFreeHashSet<UserId, UserIdHash> restricted_user_ids_;
 

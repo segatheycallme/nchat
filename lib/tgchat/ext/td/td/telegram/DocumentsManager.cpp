@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -72,7 +72,7 @@ tl_object_ptr<td_api::document> DocumentsManager::get_document_object(FileId fil
 }
 
 Document DocumentsManager::on_get_document(RemoteDocument remote_document, DialogId owner_dialog_id,
-                                           MultiPromiseActor *load_data_multipromise_ptr,
+                                           bool is_self_destructing, MultiPromiseActor *load_data_multipromise_ptr,
                                            Document::Type default_document_type, Subtype document_subtype) {
   tl_object_ptr<telegram_api::documentAttributeAnimated> animated;
   tl_object_ptr<telegram_api::documentAttributeVideo> video;
@@ -147,7 +147,7 @@ Document DocumentsManager::on_get_document(RemoteDocument remote_document, Dialo
       type_attributes--;
       audio = nullptr;
     }
-    if (default_document_type == Document::Type::Video) {
+    if (animated != nullptr && default_document_type == Document::Type::Video) {
       type_attributes--;
       animated = nullptr;
     }
@@ -171,6 +171,11 @@ Document DocumentsManager::on_get_document(RemoteDocument remote_document, Dialo
       type_attributes--;
       video = nullptr;
     }
+  } else if (animated != nullptr && default_document_type == Document::Type::Video) {
+    LOG(ERROR) << "Receive " << to_string(remote_document.document) << " with " << to_string(animated)
+               << " and without video";
+    type_attributes--;
+    animated = nullptr;
   }
   if (animated != nullptr && audio != nullptr) {
     // animation send as audio
@@ -208,7 +213,7 @@ Document DocumentsManager::on_get_document(RemoteDocument remote_document, Dialo
       }
       if (is_voice_note) {
         document_type = Document::Type::VoiceNote;
-        file_type = FileType::VoiceNote;
+        file_type = is_self_destructing ? FileType::SelfDestructingVoiceNote : FileType::VoiceNote;
         default_extension = Slice("oga");
         file_name.clear();
       } else {
@@ -235,11 +240,11 @@ Document DocumentsManager::on_get_document(RemoteDocument remote_document, Dialo
       }
       if (is_video_note) {
         document_type = Document::Type::VideoNote;
-        file_type = FileType::VideoNote;
+        file_type = is_self_destructing ? FileType::SelfDestructingVideoNote : FileType::VideoNote;
         file_name.clear();
       } else {
         document_type = Document::Type::Video;
-        file_type = FileType::Video;
+        file_type = is_self_destructing ? FileType::SelfDestructingVideo : FileType::Video;
       }
       default_extension = Slice("mp4");
     }
@@ -656,12 +661,13 @@ tl_object_ptr<telegram_api::InputMedia> DocumentsManager::get_input_media(
   }
   const auto *main_remote_location = file_view.get_main_remote_location();
   if (main_remote_location != nullptr && !main_remote_location->is_web() && input_file == nullptr) {
-    return make_tl_object<telegram_api::inputMediaDocument>(0, false /*ignored*/,
-                                                            main_remote_location->as_input_document(), 0, string());
+    return telegram_api::make_object<telegram_api::inputMediaDocument>(
+        0, false /*ignored*/, main_remote_location->as_input_document(), nullptr, 0, 0, string());
   }
   const auto *url = file_view.get_url();
   if (url != nullptr) {
-    return make_tl_object<telegram_api::inputMediaDocumentExternal>(0, false /*ignored*/, *url, 0);
+    return telegram_api::make_object<telegram_api::inputMediaDocumentExternal>(0, false /*ignored*/, *url, 0, nullptr,
+                                                                               0);
   }
 
   if (input_file != nullptr) {
@@ -680,10 +686,10 @@ tl_object_ptr<telegram_api::InputMedia> DocumentsManager::get_input_media(
     if (file_type == FileType::DocumentAsFile) {
       flags |= telegram_api::inputMediaUploadedDocument::FORCE_FILE_MASK;
     }
-    return make_tl_object<telegram_api::inputMediaUploadedDocument>(
+    return telegram_api::make_object<telegram_api::inputMediaUploadedDocument>(
         flags, false /*ignored*/, false /*ignored*/, false /*ignored*/, std::move(input_file),
         std::move(input_thumbnail), document->mime_type, std::move(attributes),
-        vector<tl_object_ptr<telegram_api::InputDocument>>(), 0);
+        vector<telegram_api::object_ptr<telegram_api::InputDocument>>(), nullptr, 0, 0);
   } else {
     CHECK(main_remote_location == nullptr);
   }

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,7 +17,6 @@
 #include "td/telegram/DialogInviteLink.h"
 #include "td/telegram/DialogLocation.h"
 #include "td/telegram/DialogParticipant.h"
-#include "td/telegram/EmojiStatus.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
 #include "td/telegram/MessageFullId.h"
@@ -54,6 +53,8 @@
 namespace td {
 
 struct BinlogEvent;
+class BotVerification;
+class EmojiStatus;
 struct MinChannel;
 class Td;
 
@@ -161,6 +162,7 @@ class ChatManager final : public Actor {
   void on_update_channel_sticker_set(ChannelId channel_id, StickerSetId sticker_set_id);
   void on_update_channel_emoji_sticker_set(ChannelId channel_id, StickerSetId sticker_set_id);
   void on_update_channel_unrestrict_boost_count(ChannelId channel_id, int32 unrestrict_boost_count);
+  void on_update_channel_gift_count(ChannelId channel_id, int32 gift_count, bool is_added);
   void on_update_channel_linked_channel_id(ChannelId channel_id, ChannelId group_channel_id);
   void on_update_channel_location(ChannelId channel_id, const DialogLocation &location);
   void on_update_channel_slow_mode_delay(ChannelId channel_id, int32 slow_mode_delay, Promise<Unit> &&promise);
@@ -235,7 +237,8 @@ class ChatManager final : public Actor {
   void set_channel_profile_accent_color(ChannelId channel_id, AccentColorId profile_accent_color_id,
                                         CustomEmojiId profile_background_custom_emoji_id, Promise<Unit> &&promise);
 
-  void set_channel_emoji_status(ChannelId channel_id, const EmojiStatus &emoji_status, Promise<Unit> &&promise);
+  void set_channel_emoji_status(ChannelId channel_id, const unique_ptr<EmojiStatus> &emoji_status,
+                                Promise<Unit> &&promise);
 
   void set_channel_sticker_set(ChannelId channel_id, StickerSetId sticker_set_id, Promise<Unit> &&promise);
 
@@ -277,6 +280,9 @@ class ChatManager final : public Actor {
   void report_channel_spam(ChannelId channel_id, const vector<MessageId> &message_ids, Promise<Unit> &&promise);
 
   void report_channel_anti_spam_false_positive(ChannelId channel_id, MessageId message_id, Promise<Unit> &&promise);
+
+  void set_channel_send_paid_messages_star_count(DialogId dialog_id, int64 send_paid_messages_star_count,
+                                                 Promise<Unit> &&promise);
 
   void delete_chat(ChatId chat_id, Promise<Unit> &&promise);
 
@@ -348,8 +354,7 @@ class ChatManager final : public Actor {
   DialogParticipantStatus get_channel_status(ChannelId channel_id) const;
   DialogParticipantStatus get_channel_permissions(ChannelId channel_id) const;
   bool get_channel_is_verified(ChannelId channel_id) const;
-  bool get_channel_is_scam(ChannelId channel_id) const;
-  bool get_channel_is_fake(ChannelId channel_id) const;
+  td_api::object_ptr<td_api::verificationStatus> get_channel_verification_status_object(ChannelId channel_id) const;
   int32 get_channel_participant_count(ChannelId channel_id) const;
   bool get_channel_sign_messages(ChannelId channel_id) const;
   bool get_channel_show_message_sender(ChannelId channel_id) const;
@@ -374,7 +379,7 @@ class ChatManager final : public Actor {
 
   int64 get_supergroup_id_object(ChannelId channel_id, const char *source) const;
 
-  tl_object_ptr<td_api::supergroup> get_supergroup_object(ChannelId channel_id) const;
+  td_api::object_ptr<td_api::supergroup> get_supergroup_object(ChannelId channel_id) const;
 
   tl_object_ptr<td_api::supergroupFullInfo> get_supergroup_full_info_object(ChannelId channel_id) const;
 
@@ -468,8 +473,8 @@ class ChatManager final : public Actor {
     int64 access_hash = 0;
     string title;
     DialogPhoto photo;
-    EmojiStatus emoji_status;
-    EmojiStatus last_sent_emoji_status;
+    unique_ptr<EmojiStatus> emoji_status;
+    unique_ptr<EmojiStatus> last_sent_emoji_status;
     AccentColorId accent_color_id;
     CustomEmojiId background_custom_emoji_id;
     AccentColorId profile_accent_color_id;
@@ -482,6 +487,8 @@ class ChatManager final : public Actor {
     int32 date = 0;
     int32 participant_count = 0;
     int32 boost_level = 0;
+    int64 paid_message_star_count = 0;
+    CustomEmojiId bot_verification_icon;
 
     double max_active_story_id_next_reload_time = 0.0;
     StoryId max_active_story_id;
@@ -554,10 +561,12 @@ class ChatManager final : public Actor {
     int32 banned_count = 0;
     int32 boost_count = 0;
     int32 unrestrict_boost_count = 0;
+    int32 gift_count = 0;
 
     DialogInviteLink invite_link;
 
     vector<BotCommands> bot_commands;
+    unique_ptr<BotVerification> bot_verification;
 
     uint32 speculative_version = 1;
     uint32 repair_request_version = 0;
@@ -593,7 +602,9 @@ class ChatManager final : public Actor {
     bool has_aggressive_anti_spam_enabled = false;
     bool can_be_deleted = false;
     bool has_pinned_stories = false;
-    bool has_paid_media_allowed = false;
+    bool has_paid_media_allowed = false;  // also used for paid reactions
+    bool has_stargifts_available = false;
+    bool has_paid_messages_available = false;
 
     bool is_slow_mode_next_send_date_changed = true;
     bool is_being_updated = false;
@@ -704,6 +715,7 @@ class ChatManager final : public Actor {
   static ChannelType get_channel_type(const Channel *c);
   static DialogParticipantStatus get_channel_status(const Channel *c);
   DialogParticipantStatus get_channel_permissions(ChannelId channel_id, const Channel *c) const;
+  td_api::object_ptr<td_api::verificationStatus> get_channel_verification_status_object(const Channel *c) const;
   static bool get_channel_sign_messages(const Channel *c);
   static bool get_channel_show_message_sender(const Channel *c);
   static bool get_channel_has_linked_channel(const Channel *c);
@@ -733,7 +745,7 @@ class ChatManager final : public Actor {
   void on_update_channel_photo(Channel *c, ChannelId channel_id,
                                tl_object_ptr<telegram_api::ChatPhoto> &&chat_photo_ptr);
   void on_update_channel_photo(Channel *c, ChannelId channel_id, DialogPhoto &&photo, bool invalidate_photo_cache);
-  void on_update_channel_emoji_status(Channel *c, ChannelId channel_id, EmojiStatus emoji_status);
+  void on_update_channel_emoji_status(Channel *c, ChannelId channel_id, unique_ptr<EmojiStatus> emoji_status);
   void on_update_channel_accent_color_id(Channel *c, ChannelId channel_id, AccentColorId accent_color_id);
   void on_update_channel_background_custom_emoji_id(Channel *c, ChannelId channel_id,
                                                     CustomEmojiId background_custom_emoji_id);
@@ -752,6 +764,7 @@ class ChatManager final : public Actor {
   void on_update_channel_story_ids_impl(Channel *c, ChannelId channel_id, StoryId max_active_story_id,
                                         StoryId max_read_story_id);
   void on_update_channel_max_read_story_id(Channel *c, ChannelId channel_id, StoryId max_read_story_id);
+  void on_update_channel_bot_verification_icon(Channel *c, ChannelId channel_id, CustomEmojiId bot_verification_icon);
 
   void on_update_channel_full_photo(ChannelFull *channel_full, ChannelId channel_id, Photo photo);
   void on_update_channel_full_invite_link(ChannelFull *channel_full,
@@ -868,7 +881,7 @@ class ChatManager final : public Actor {
 
   td_api::object_ptr<td_api::updateSupergroup> get_update_unknown_supergroup_object(ChannelId channel_id) const;
 
-  static tl_object_ptr<td_api::supergroup> get_supergroup_object(ChannelId channel_id, const Channel *c);
+  td_api::object_ptr<td_api::supergroup> get_supergroup_object(ChannelId channel_id, const Channel *c) const;
 
   Status can_hide_chat_participants(ChatId chat_id) const;
 

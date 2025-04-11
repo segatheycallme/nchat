@@ -1,6 +1,6 @@
 // main.cpp
 //
-// Copyright (c) 2019-2024 Kristofer Berggren
+// Copyright (c) 2019-2025 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -92,6 +92,8 @@ public:
       return protocol;
     }
 
+    // intentionally leak 'handle' as dlclose may cause exit crash as go routines are not explicitly managed
+
     T* (* CreateFunc)() = (T * (*)())dlsym(handle, createFunc.c_str());
     if (CreateFunc == nullptr)
     {
@@ -107,18 +109,18 @@ public:
   }
 };
 
-static std::vector<ProtocolBaseFactory*> GetProtocolFactorys()
+static std::vector<std::shared_ptr<ProtocolBaseFactory>> GetProtocolFactorys()
 {
-  std::vector<ProtocolBaseFactory*> protocolFactorys =
+  std::vector<std::shared_ptr<ProtocolBaseFactory>> protocolFactorys =
   {
 #ifdef HAS_DUMMY
-    new ProtocolFactory<DuChat>(),
+    std::shared_ptr<ProtocolBaseFactory>(new ProtocolFactory<DuChat>()),
 #endif
 #ifdef HAS_TELEGRAM
-    new ProtocolFactory<TgChat>(),
+    std::shared_ptr<ProtocolBaseFactory>(new ProtocolFactory<TgChat>()),
 #endif
 #ifdef HAS_WHATSAPP
-    new ProtocolFactory<WmChat>(),
+    std::shared_ptr<ProtocolBaseFactory>(new ProtocolFactory<WmChat>()),
 #endif
   };
 
@@ -339,7 +341,7 @@ int main(int argc, char* argv[])
     else
     {
       bool found = false;
-      std::vector<ProtocolBaseFactory*> allProtocolFactorys = GetProtocolFactorys();
+      std::vector<std::shared_ptr<ProtocolBaseFactory>> allProtocolFactorys = GetProtocolFactorys();
       for (auto& protocolFactory : allProtocolFactorys)
       {
         if (protocolFactory->GetName() == protocolName)
@@ -408,7 +410,6 @@ int main(int argc, char* argv[])
   }
 
   // Cleanup ui
-  ui->Cleanup();
   ui.reset();
 
   // Perform export if requested
@@ -513,7 +514,7 @@ void RemoveProfile()
 std::shared_ptr<Protocol> SetupProfile()
 {
   std::shared_ptr<Protocol> rv;
-  std::vector<ProtocolBaseFactory*> protocolFactorys = GetProtocolFactorys();
+  std::vector<std::shared_ptr<ProtocolBaseFactory>> protocolFactorys = GetProtocolFactorys();
 
   std::cout << "Protocols:" << std::endl;
   size_t idx = 0;
@@ -606,7 +607,7 @@ void ShowHelp()
     "    Ctrl-f      jump to unread chat\n"
     "    Ctrl-g      toggle show help bar\n"
     "    Ctrl-l      toggle show contact list\n"
-    "    Ctrl-n      search contacts\n"
+    "    Ctrl-n      goto chat\n"
     "    Ctrl-p      toggle show top bar\n"
     "    Ctrl-q      quit\n"
     "    Ctrl-s      insert emoji\n"
@@ -616,7 +617,7 @@ void ShowHelp()
     "    KeyUp       select message\n"
     "    Alt-d       delete/leave current chat\n"
     "    Alt-e       external editor compose\n"
-    "    Alt-n       goto chat\n"
+    "    Alt-n       search contacts\n"
     "    Alt-t       external telephone call\n"
     "    Alt-/       find in chat\n"
     "    Alt-?       find next in chat\n"
@@ -660,7 +661,7 @@ void ShowVersion()
   std::cout <<
     AppUtil::GetAppName(true /*p_WithVersion*/) << "\n"
     "\n"
-    "Copyright (c) 2019-2024 Kristofer Berggren\n"
+    "Copyright (c) 2019-2025 Kristofer Berggren\n"
     "\n"
     "nchat is distributed under the MIT license.\n"
     "\n"
