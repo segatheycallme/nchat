@@ -115,9 +115,14 @@ class UpdatesManager final : public Actor {
   static vector<std::pair<const telegram_api::Message *, bool>> get_new_messages(
       const telegram_api::Updates *updates_ptr);
 
-  static vector<InputGroupCallId> get_update_new_group_call_ids(const telegram_api::Updates *updates_ptr);
+  static InputGroupCallId get_update_new_group_call_id(const telegram_api::Updates *updates_ptr);
+
+  void process_updates_users_and_chats(telegram_api::Updates *updates_ptr);
 
   static string extract_join_group_call_presentation_params(telegram_api::Updates *updates_ptr);
+
+  static telegram_api::object_ptr<telegram_api::StoryItem> extract_story(telegram_api::Updates *updates_ptr,
+                                                                         DialogId owner_dialog_id);
 
   static vector<DialogId> get_update_notify_settings_dialog_ids(const telegram_api::Updates *updates_ptr);
 
@@ -485,8 +490,6 @@ class UpdatesManager final : public Actor {
 
   bool is_acceptable_update(const telegram_api::Update *update) const;
 
-  static int32 fix_short_message_flags(int32 flags);
-
   void on_update(tl_object_ptr<telegram_api::updateNewMessage> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateMessageID> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateReadMessagesContents> update, Promise<Unit> &&promise);
@@ -620,6 +623,7 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updatePhoneCallSignalingData> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateGroupCallConnection> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updateGroupCallChainBlocks> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateGroupCall> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateGroupCallParticipants> update, Promise<Unit> &&promise);
 
@@ -638,6 +642,8 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateDeleteScheduledMessages> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateLoginToken> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateSentPhoneCode> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateBotStopped> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateChatParticipant> update, Promise<Unit> &&promise);

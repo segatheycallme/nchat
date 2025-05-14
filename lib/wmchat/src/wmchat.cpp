@@ -69,14 +69,6 @@ bool WmChat::SetupProfile(const std::string& p_ProfilesDir, std::string& p_Profi
   std::cout << "\n";
 
   std::string phoneNumber = StrUtil::GetPhoneNumber();
-
-  std::cout << "\n";
-  std::cout << "Open WhatsApp on your phone, click the menu bar and select \"Linked devices\".\n";
-  std::cout << "Click on \"Link a device\", unlock the phone and aim its camera at the\n";
-  std::cout << "Qr code displayed on the computer screen.\n";
-  std::cout << "\n";
-
-
   m_ProfileId = m_ProfileId + "_" + phoneNumber;
   std::string profileDir = p_ProfilesDir + "/" + m_ProfileId;
 
@@ -511,7 +503,7 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
 
     case SetStatusRequestType:
       {
-        LOG_DEBUG("set status");
+        LOG_TRACE("set status");
         std::shared_ptr<SetStatusRequest> setStatusRequest =
           std::static_pointer_cast<SetStatusRequest>(p_RequestMessage);
         int32_t isOnline = setStatusRequest->isOnline ? 1 : 0;
@@ -707,7 +699,8 @@ void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Pho
     contactInfo.phone = std::string(p_Phone);
     contactInfo.isSelf = (p_IsSelf == 1) ? true : false;
 
-    std::shared_ptr<NewContactsNotify> newContactsNotify = std::make_shared<NewContactsNotify>(instance->GetProfileId());
+    std::shared_ptr<NewContactsNotify> newContactsNotify =
+      std::make_shared<NewContactsNotify>(instance->GetProfileId());
     newContactsNotify->contactInfos = std::vector<ContactInfo>({ contactInfo });
 
     std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
@@ -774,7 +767,8 @@ void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_Se
     chatMessage.timeSent = (((int64_t)p_TimeSent) * 1000) + (std::hash<std::string>{ }(chatMessage.id) % 256);
     chatMessage.isRead = (p_IsRead == 1);
 
-    std::shared_ptr<NewMessagesNotify> newMessagesNotify = std::make_shared<NewMessagesNotify>(instance->GetProfileId());
+    std::shared_ptr<NewMessagesNotify> newMessagesNotify =
+      std::make_shared<NewMessagesNotify>(instance->GetProfileId());
     newMessagesNotify->success = true;
     newMessagesNotify->chatId = std::string(p_ChatId);
     newMessagesNotify->chatMessages = std::vector<ChatMessage>({ chatMessage });
@@ -1031,6 +1025,19 @@ void WmSetStatus(int p_Flags)
 void WmClearStatus(int p_Flags)
 {
   Status::Clear(p_Flags);
+}
+
+int WmAppConfigGetNum(char* p_Param)
+{
+  int value = AppConfig::GetNum(std::string(p_Param));
+  free(p_Param);
+  return value;
+}
+
+void WmAppConfigSetNum(char* p_Param, int p_Value)
+{
+  AppConfig::SetNum(std::string(p_Param), p_Value);
+  free(p_Param);
 }
 
 void WmLogTrace(char* p_Filename, int p_LineNo, char* p_Message)

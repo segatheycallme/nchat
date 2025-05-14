@@ -13,6 +13,7 @@
 #include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/logevent/LogEventHelper.h"
 #include "td/telegram/net/NetQueryCreator.h"
+#include "td/telegram/OptionManager.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/TdDb.h"
 #include "td/telegram/telegram_api.h"
@@ -387,13 +388,10 @@ class ChangeAuthorizationSettingsQuery final : public Td::ResultHandler {
     if (set_call_requests_disabled) {
       flags |= telegram_api::account_changeAuthorizationSettings::CALL_REQUESTS_DISABLED_MASK;
     }
-    if (confirm) {
-      flags |= telegram_api::account_changeAuthorizationSettings::CONFIRMED_MASK;
-    }
-    send_query(G()->net_query_creator().create(
-        telegram_api::account_changeAuthorizationSettings(flags, false /*ignored*/, hash, encrypted_requests_disabled,
-                                                          call_requests_disabled),
-        {{"me"}}));
+    send_query(
+        G()->net_query_creator().create(telegram_api::account_changeAuthorizationSettings(
+                                            flags, confirm, hash, encrypted_requests_disabled, call_requests_disabled),
+                                        {{"me"}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -1009,6 +1007,9 @@ void AccountManager::confirm_session(int64 session_id, Promise<Unit> &&promise) 
 }
 
 void AccountManager::toggle_session_can_accept_calls(int64 session_id, bool can_accept_calls, Promise<Unit> &&promise) {
+  if (session_id == 0) {
+    td_->option_manager_->set_option_boolean("can_accept_calls", can_accept_calls);
+  }
   change_authorization_settings_on_server(session_id, false, false, true, !can_accept_calls, false, 0,
                                           std::move(promise));
 }

@@ -287,9 +287,7 @@ AnimationSize get_animation_size(Td *td, PhotoSizeSource source, int64 id, int64
   result.type = PhotoSizeType(type);
   result.dimensions = get_dimensions(size->w_, size->h_, "get_animation_size");
   result.size = size->size_;
-  if ((size->flags_ & telegram_api::videoSize::VIDEO_START_TS_MASK) != 0) {
-    result.main_frame_timestamp = size->video_start_ts_;
-  }
+  result.main_frame_timestamp = size->video_start_ts_;
 
   if (source.get_type("get_animation_size") == PhotoSizeSource::Type::Thumbnail) {
     source.thumbnail().thumbnail_type = result.type;
@@ -338,7 +336,7 @@ PhotoSize get_web_document_photo_size(FileManager *file_manager, FileType file_t
   }
 
   FileId file_id;
-  vector<tl_object_ptr<telegram_api::DocumentAttribute>> attributes;
+  vector<telegram_api::object_ptr<telegram_api::DocumentAttribute>> attributes;
   int32 size = 0;
   string mime_type;
   switch (web_document_ptr->get_id()) {
@@ -389,7 +387,7 @@ PhotoSize get_web_document_photo_size(FileManager *file_manager, FileType file_t
   for (auto &attribute : attributes) {
     switch (attribute->get_id()) {
       case telegram_api::documentAttributeImageSize::ID: {
-        auto image_size = move_tl_object_as<telegram_api::documentAttributeImageSize>(attribute);
+        auto image_size = telegram_api::move_object_as<telegram_api::documentAttributeImageSize>(attribute);
         dimensions = get_dimensions(image_size->w_, image_size->h_, "web documentAttributeImageSize");
         break;
       }

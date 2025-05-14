@@ -76,14 +76,8 @@ class GetAllStoriesQuery final : public Td::ResultHandler {
     if (!state.empty()) {
       flags |= telegram_api::stories_getAllStories::STATE_MASK;
     }
-    if (is_next) {
-      flags |= telegram_api::stories_getAllStories::NEXT_MASK;
-    }
-    if (story_list_id == StoryListId::archive()) {
-      flags |= telegram_api::stories_getAllStories::HIDDEN_MASK;
-    }
-    send_query(G()->net_query_creator().create(
-        telegram_api::stories_getAllStories(flags, false /*ignored*/, false /*ignored*/, state)));
+    bool hidden = story_list_id == StoryListId::archive();
+    send_query(G()->net_query_creator().create(telegram_api::stories_getAllStories(flags, is_next, hidden, state)));
   }
 
   void on_result(BufferSlice packet) final {
@@ -273,15 +267,13 @@ class SendStoryReactionQuery final : public Td::ResultHandler {
       return on_error(Status::Error(400, "Can't access the chat"));
     }
     CHECK(!reaction_type.is_paid_reaction());
-
-    int32 flags = 0;
-    if (!reaction_type.is_empty() && add_to_recent) {
-      flags |= telegram_api::stories_sendReaction::ADD_TO_RECENT_MASK;
+    if (reaction_type.is_empty()) {
+      add_to_recent = false;
     }
 
     send_query(G()->net_query_creator().create(
-        telegram_api::stories_sendReaction(flags, false /*ignored*/, std::move(input_peer),
-                                           story_full_id.get_story_id().get(), reaction_type.get_input_reaction()),
+        telegram_api::stories_sendReaction(0, add_to_recent, std::move(input_peer), story_full_id.get_story_id().get(),
+                                           reaction_type.get_input_reaction()),
         {{story_full_id}, {"view_story"}}));
   }
 
@@ -326,17 +318,8 @@ class GetStoryViewsListQuery final : public Td::ResultHandler {
     if (!query.empty()) {
       flags |= telegram_api::stories_getStoryViewsList::Q_MASK;
     }
-    if (only_contacts) {
-      flags |= telegram_api::stories_getStoryViewsList::JUST_CONTACTS_MASK;
-    }
-    if (prefer_forwards) {
-      flags |= telegram_api::stories_getStoryViewsList::FORWARDS_FIRST_MASK;
-    }
-    if (prefer_with_reaction) {
-      flags |= telegram_api::stories_getStoryViewsList::REACTIONS_FIRST_MASK;
-    }
     send_query(G()->net_query_creator().create(
-        telegram_api::stories_getStoryViewsList(flags, false /*ignored*/, false /*ignored*/, false /*ignored*/,
+        telegram_api::stories_getStoryViewsList(flags, only_contacts, prefer_with_reaction, prefer_forwards,
                                                 std::move(input_peer), query, story_id.get(), offset, limit)));
   }
 
@@ -383,11 +366,8 @@ class GetStoryReactionsListQuery final : public Td::ResultHandler {
     if (!offset.empty()) {
       flags |= telegram_api::stories_getStoryReactionsList::OFFSET_MASK;
     }
-    if (prefer_forwards) {
-      flags |= telegram_api::stories_getStoryReactionsList::FORWARDS_FIRST_MASK;
-    }
     send_query(G()->net_query_creator().create(telegram_api::stories_getStoryReactionsList(
-        flags, false /*ignored*/, std::move(input_peer), story_full_id.get_story_id().get(),
+        flags, prefer_forwards, std::move(input_peer), story_full_id.get_story_id().get(),
         reaction_type.get_input_reaction(), offset, limit)));
   }
 
@@ -995,11 +975,8 @@ class ActivateStealthModeQuery final : public Td::ResultHandler {
   }
 
   void send() {
-    int32 flags =
-        telegram_api::stories_activateStealthMode::PAST_MASK | telegram_api::stories_activateStealthMode::FUTURE_MASK;
-
-    send_query(G()->net_query_creator().create(
-        telegram_api::stories_activateStealthMode(flags, false /*ignored*/, false /*ignored*/), {{"view_story"}}));
+    send_query(
+        G()->net_query_creator().create(telegram_api::stories_activateStealthMode(0, true, true), {{"view_story"}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -1062,11 +1039,11 @@ class GetChatsToSendStoriesQuery final : public Td::ResultHandler {
 };
 
 class CanSendStoryQuery final : public Td::ResultHandler {
-  Promise<td_api::object_ptr<td_api::CanSendStoryResult>> promise_;
+  Promise<td_api::object_ptr<td_api::CanPostStoryResult>> promise_;
   DialogId dialog_id_;
 
  public:
-  explicit CanSendStoryQuery(Promise<td_api::object_ptr<td_api::CanSendStoryResult>> &&promise)
+  explicit CanSendStoryQuery(Promise<td_api::object_ptr<td_api::CanPostStoryResult>> &&promise)
       : promise_(std::move(promise)) {
   }
 
@@ -1085,11 +1062,11 @@ class CanSendStoryQuery final : public Td::ResultHandler {
       return on_error(result_ptr.move_as_error());
     }
 
-    promise_.set_value(td_api::make_object<td_api::canSendStoryResultOk>());
+    promise_.set_value(td_api::make_object<td_api::canPostStoryResultOk>());
   }
 
   void on_error(Status status) final {
-    auto result = StoryManager::get_can_send_story_result_object(status);
+    auto result = StoryManager::get_can_post_story_result_object(status);
     if (result != nullptr) {
       return promise_.set_value(std::move(result));
     }
@@ -1131,7 +1108,8 @@ class StoryManager::SendStoryQuery final : public Td::ResultHandler {
 
     const FormattedText &caption = story->caption_;
     auto entities = get_input_message_entities(td_->user_manager_.get(), &caption, "SendStoryQuery");
-    if (!td_->option_manager_->get_option_boolean("can_use_text_entities_in_story_caption")) {
+    if (!td_->auth_manager_->is_bot() &&
+        !td_->option_manager_->get_option_boolean("can_use_text_entities_in_story_caption")) {
       entities.clear();
     }
     auto privacy_rules = story->privacy_rules_.get_input_privacy_rules(td_);
@@ -1143,19 +1121,12 @@ class StoryManager::SendStoryQuery final : public Td::ResultHandler {
     if (!entities.empty()) {
       flags |= telegram_api::stories_sendStory::ENTITIES_MASK;
     }
-    if (pending_story_->story_->is_pinned_) {
-      flags |= telegram_api::stories_sendStory::PINNED_MASK;
-    }
     if (period != 86400) {
       flags |= telegram_api::stories_sendStory::PERIOD_MASK;
     }
     if (story->forward_info_ != nullptr) {
-      flags |= telegram_api::stories_sendStory::FWD_MODIFIED_MASK;
       flags |= telegram_api::stories_sendStory::FWD_FROM_ID_MASK;
       flags |= telegram_api::stories_sendStory::FWD_FROM_STORY_MASK;
-    }
-    if (story->noforwards_) {
-      flags |= telegram_api::stories_sendStory::NOFORWARDS_MASK;
     }
     auto input_media_areas = MediaArea::get_input_media_areas(td_, story->areas_);
     if (!input_media_areas.empty()) {
@@ -1163,10 +1134,11 @@ class StoryManager::SendStoryQuery final : public Td::ResultHandler {
     }
 
     send_query(G()->net_query_creator().create(
-        telegram_api::stories_sendStory(flags, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-                                        std::move(input_peer), std::move(input_media), std::move(input_media_areas),
-                                        caption.text, std::move(entities), std::move(privacy_rules),
-                                        pending_story_->random_id_, period, std::move(fwd_input_peer), fwd_story_id),
+        telegram_api::stories_sendStory(flags, pending_story_->story_->is_pinned_, story->noforwards_,
+                                        story->forward_info_ != nullptr, std::move(input_peer), std::move(input_media),
+                                        std::move(input_media_areas), caption.text, std::move(entities),
+                                        std::move(privacy_rules), pending_story_->random_id_, period,
+                                        std::move(fwd_input_peer), fwd_story_id),
         {{pending_story_->dialog_id_}}));
   }
 
@@ -1209,8 +1181,8 @@ class StoryManager::EditStoryQuery final : public Td::ResultHandler {
   unique_ptr<PendingStory> pending_story_;
 
  public:
-  void send(const Story *story, unique_ptr<PendingStory> pending_story,
-            telegram_api::object_ptr<telegram_api::InputFile> input_file, const BeingEditedStory *edited_story) {
+  void send(unique_ptr<PendingStory> pending_story, telegram_api::object_ptr<telegram_api::InputFile> input_file,
+            const BeingEditedStory *edited_story) {
     pending_story_ = std::move(pending_story);
     CHECK(pending_story_ != nullptr);
     dialog_id_ = pending_story_->dialog_id_;
@@ -1285,6 +1257,68 @@ class StoryManager::EditStoryQuery final : public Td::ResultHandler {
     }
 
     td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "EditStoryQuery");
+    td_->story_manager_->delete_pending_story(std::move(pending_story_), std::move(status));
+  }
+};
+
+class StoryManager::EditBusinessStoryQuery final : public Td::ResultHandler {
+  DialogId dialog_id_;
+  unique_ptr<PendingStory> pending_story_;
+
+ public:
+  void send(unique_ptr<PendingStory> pending_story, telegram_api::object_ptr<telegram_api::InputFile> input_file,
+            const BeingEditedBusinessStory *edited_story) {
+    pending_story_ = std::move(pending_story);
+    CHECK(pending_story_ != nullptr);
+    dialog_id_ = pending_story_->dialog_id_;
+
+    auto input_peer = td_->dialog_manager_->get_input_peer(dialog_id_, AccessRights::Read);
+    if (input_peer == nullptr) {
+      return on_error(Status::Error(400, "Can't access the chat"));
+    }
+
+    int32 flags = telegram_api::stories_editStory::MEDIA_MASK | telegram_api::stories_editStory::MEDIA_AREAS_MASK |
+                  telegram_api::stories_editStory::CAPTION_MASK | telegram_api::stories_editStory::ENTITIES_MASK |
+                  telegram_api::stories_editStory::PRIVACY_RULES_MASK;
+    const StoryContent *content = edited_story->content_.get();
+    CHECK(input_file != nullptr);
+    auto input_media = get_story_content_input_media(td_, content, std::move(input_file));
+    CHECK(input_media != nullptr);
+    auto input_media_areas = MediaArea::get_input_media_areas(td_, edited_story->areas_);
+    auto entities =
+        get_input_message_entities(td_->user_manager_.get(), &edited_story->caption_, "EditBusinessStoryQuery");
+    auto input_privacy_rules = edited_story->privacy_rules_.get_input_privacy_rules(td_);
+    send_query(G()->net_query_creator().create(
+        telegram_api::stories_editStory(flags, std::move(input_peer), pending_story_->story_id_.get(),
+                                        std::move(input_media), std::move(input_media_areas),
+                                        edited_story->caption_.text, std::move(entities),
+                                        std::move(input_privacy_rules)),
+        {{StoryFullId{pending_story_->dialog_id_, pending_story_->story_id_}}}));
+  }
+
+  void on_result(BufferSlice packet) final {
+    auto result_ptr = fetch_result<telegram_api::stories_editStory>(packet);
+    if (result_ptr.is_error()) {
+      return on_error(result_ptr.move_as_error());
+    }
+
+    auto ptr = result_ptr.move_as_ok();
+    LOG(INFO) << "Receive result for EditBusinessStoryQuery: " << to_string(ptr);
+
+    td_->story_manager_->on_edit_business_story(std::move(pending_story_), std::move(ptr));
+  }
+
+  void on_error(Status status) final {
+    CHECK(td_->auth_manager_->is_bot());
+    LOG(INFO) << "Receive error for EditBusinessStoryQuery: " << status;
+
+    auto bad_parts = FileManager::get_missing_file_parts(status);
+    if (!bad_parts.empty()) {
+      td_->story_manager_->on_send_story_file_parts_missing(std::move(pending_story_), std::move(bad_parts));
+      return;
+    }
+
+    td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "EditBusinessStoryQuery");
     td_->story_manager_->delete_pending_story(std::move(pending_story_), std::move(status));
   }
 };
@@ -1818,9 +1852,10 @@ bool StoryManager::can_get_story_view_count(DialogId owner_dialog_id) {
 bool StoryManager::can_post_stories(DialogId owner_dialog_id) const {
   switch (owner_dialog_id.get_type()) {
     case DialogType::User:
-      return is_my_story(owner_dialog_id);
+      return is_my_story(owner_dialog_id) != td_->auth_manager_->is_bot();
     case DialogType::Channel:
-      return td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_post_stories();
+      return !td_->auth_manager_->is_bot() &&
+             td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_post_stories();
     case DialogType::Chat:
     case DialogType::SecretChat:
     case DialogType::None:
@@ -1832,9 +1867,10 @@ bool StoryManager::can_post_stories(DialogId owner_dialog_id) const {
 bool StoryManager::can_edit_stories(DialogId owner_dialog_id) const {
   switch (owner_dialog_id.get_type()) {
     case DialogType::User:
-      return is_my_story(owner_dialog_id);
+      return is_my_story(owner_dialog_id) != td_->auth_manager_->is_bot();
     case DialogType::Channel:
-      return td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_edit_stories();
+      return !td_->auth_manager_->is_bot() &&
+             td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_edit_stories();
     case DialogType::Chat:
     case DialogType::SecretChat:
     case DialogType::None:
@@ -1846,9 +1882,10 @@ bool StoryManager::can_edit_stories(DialogId owner_dialog_id) const {
 bool StoryManager::can_delete_stories(DialogId owner_dialog_id) const {
   switch (owner_dialog_id.get_type()) {
     case DialogType::User:
-      return is_my_story(owner_dialog_id);
+      return is_my_story(owner_dialog_id) != td_->auth_manager_->is_bot();
     case DialogType::Channel:
-      return td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_delete_stories();
+      return !td_->auth_manager_->is_bot() &&
+             td_->chat_manager_->get_channel_status(owner_dialog_id.get_channel_id()).can_delete_stories();
     case DialogType::Chat:
     case DialogType::SecretChat:
     case DialogType::None:
@@ -1862,7 +1899,8 @@ bool StoryManager::can_edit_story(StoryFullId story_full_id, const Story *story)
     return false;
   }
   auto owner_dialog_id = story_full_id.get_dialog_id();
-  return can_edit_stories(owner_dialog_id) || (story->is_outgoing_ && can_post_stories(owner_dialog_id));
+  return can_edit_stories(owner_dialog_id) ||
+         (story != nullptr && story->is_outgoing_ && can_post_stories(owner_dialog_id));
 }
 
 bool StoryManager::can_toggle_story_is_pinned(StoryFullId story_full_id, const Story *story) const {
@@ -2038,8 +2076,8 @@ StoryManager::ActiveStories *StoryManager::get_active_stories_force(DialogId own
     return active_stories;
   }
 
-  if (!G()->use_message_database() || failed_to_load_active_stories_.count(owner_dialog_id) > 0 ||
-      !owner_dialog_id.is_valid()) {
+  if (td_->auth_manager_->is_bot() || !G()->use_message_database() ||
+      failed_to_load_active_stories_.count(owner_dialog_id) > 0 || !owner_dialog_id.is_valid()) {
     return nullptr;
   }
 
@@ -3571,26 +3609,26 @@ td_api::object_ptr<td_api::chatActiveStories> StoryManager::get_chat_active_stor
       story_list_id.get_story_list_object(), order, max_read_story_id.get(), std::move(stories));
 }
 
-td_api::object_ptr<td_api::CanSendStoryResult> StoryManager::get_can_send_story_result_object(const Status &error,
+td_api::object_ptr<td_api::CanPostStoryResult> StoryManager::get_can_post_story_result_object(const Status &error,
                                                                                               bool force) {
   CHECK(error.is_error());
   if (error.message() == "PREMIUM_ACCOUNT_REQUIRED") {
-    return td_api::make_object<td_api::canSendStoryResultPremiumNeeded>();
+    return td_api::make_object<td_api::canPostStoryResultPremiumNeeded>();
   }
   if (error.message() == "BOOSTS_REQUIRED") {
-    return td_api::make_object<td_api::canSendStoryResultBoostNeeded>();
+    return td_api::make_object<td_api::canPostStoryResultBoostNeeded>();
   }
   if (error.message() == "STORIES_TOO_MUCH") {
-    return td_api::make_object<td_api::canSendStoryResultActiveStoryLimitExceeded>();
+    return td_api::make_object<td_api::canPostStoryResultActiveStoryLimitExceeded>();
   }
   if (begins_with(error.message(), "STORY_SEND_FLOOD_WEEKLY_")) {
     auto r_next_date = to_integer_safe<int32>(error.message().substr(Slice("STORY_SEND_FLOOD_WEEKLY_").size()));
     if (r_next_date.is_ok() && r_next_date.ok() > 0) {
       auto retry_after = r_next_date.ok() - G()->unix_time();
       if (retry_after > 0 || force) {
-        return td_api::make_object<td_api::canSendStoryResultWeeklyLimitExceeded>(max(retry_after, 0));
+        return td_api::make_object<td_api::canPostStoryResultWeeklyLimitExceeded>(max(retry_after, 0));
       } else {
-        return td_api::make_object<td_api::canSendStoryResultOk>();
+        return td_api::make_object<td_api::canPostStoryResultOk>();
       }
     }
   }
@@ -3599,9 +3637,9 @@ td_api::object_ptr<td_api::CanSendStoryResult> StoryManager::get_can_send_story_
     if (r_next_date.is_ok() && r_next_date.ok() > 0) {
       auto retry_after = r_next_date.ok() - G()->unix_time();
       if (retry_after > 0 || force) {
-        return td_api::make_object<td_api::canSendStoryResultMonthlyLimitExceeded>(max(retry_after, 0));
+        return td_api::make_object<td_api::canPostStoryResultMonthlyLimitExceeded>(max(retry_after, 0));
       } else {
-        return td_api::make_object<td_api::canSendStoryResultOk>();
+        return td_api::make_object<td_api::canPostStoryResultOk>();
       }
     }
   }
@@ -3646,9 +3684,6 @@ StoryId StoryManager::on_get_story(DialogId owner_dialog_id,
     LOG(ERROR) << "Receive a story in " << owner_dialog_id;
     return {};
   }
-  if (td_->auth_manager_->is_bot()) {
-    return {};
-  }
   CHECK(story_item_ptr != nullptr);
   switch (story_item_ptr->get_id()) {
     case telegram_api::storyItemDeleted::ID:
@@ -3679,8 +3714,7 @@ StoryId StoryManager::on_get_new_story(DialogId owner_dialog_id,
     return StoryId();
   }
 
-  td_->dialog_manager_->force_create_dialog(owner_dialog_id, "on_get_new_story");
-
+  bool is_bot = td_->auth_manager_->is_bot();
   StoryId old_story_id;
   auto updates_story_ids_it = update_story_ids_.find(story_full_id);
   if (updates_story_ids_it != update_story_ids_.end()) {
@@ -3699,12 +3733,14 @@ StoryId StoryManager::on_get_new_story(DialogId owner_dialog_id,
     }
   }
 
-  bool is_bot = td_->auth_manager_->is_bot();
+  td_->dialog_manager_->force_create_dialog(owner_dialog_id, "on_get_new_story");
+
   auto caption =
       get_message_text(td_->user_manager_.get(), std::move(story_item->caption_), std::move(story_item->entities_),
                        true, is_bot, story_item->date_, false, "on_get_new_story");
   auto content = get_story_content(td_, std::move(story_item->media_), owner_dialog_id);
   if (content == nullptr) {
+    LOG(INFO) << "Failed to get content of " << story_full_id;
     return StoryId();
   }
 
@@ -3854,7 +3890,7 @@ StoryId StoryManager::on_get_new_story(DialogId owner_dialog_id,
 
   LOG(INFO) << "Receive " << story_full_id;
 
-  if (is_active_story(story)) {
+  if (!td_->auth_manager_->is_bot() && is_active_story(story)) {
     auto active_stories = get_active_stories_force(owner_dialog_id, "on_get_new_story");
     if (active_stories == nullptr) {
       if (is_subscribed_to_dialog_stories(owner_dialog_id)) {
@@ -3887,8 +3923,12 @@ StoryId StoryManager::on_get_new_story(DialogId owner_dialog_id,
 
   if (old_story_id.is_valid()) {
     send_closure(G()->td(), &Td::send_update,
-                 td_api::make_object<td_api::updateStorySendSucceeded>(get_story_object(story_full_id, story),
+                 td_api::make_object<td_api::updateStoryPostSucceeded>(get_story_object(story_full_id, story),
                                                                        old_story_id.get()));
+    if (td_->auth_manager_->is_bot()) {
+      on_delete_story(story_full_id);
+      return StoryId();
+    }
   }
 
   return story_id;
@@ -3966,9 +4006,12 @@ void StoryManager::on_delete_story(StoryFullId story_full_id) {
 
   update_story_ids_.erase(story_full_id);
 
-  inaccessible_story_full_ids_.set(story_full_id, Time::now());
-  send_closure_later(G()->messages_manager(),
-                     &MessagesManager::update_story_max_reply_media_timestamp_in_replied_messages, story_full_id);
+  bool is_bot = td_->auth_manager_->is_bot();
+  if (!is_bot) {
+    inaccessible_story_full_ids_.set(story_full_id, Time::now());
+    send_closure_later(G()->messages_manager(),
+                       &MessagesManager::update_story_max_reply_media_timestamp_in_replied_messages, story_full_id);
+  }
 
   const Story *story = get_story_force(story_full_id, "on_delete_story");
   auto owner_dialog_id = story_full_id.get_dialog_id();
@@ -3997,12 +4040,14 @@ void StoryManager::on_delete_story(StoryFullId story_full_id) {
     LOG(INFO) << "Delete not found " << story_full_id;
   }
 
-  auto active_stories = get_active_stories_force(owner_dialog_id, "on_get_deleted_story");
-  if (active_stories != nullptr && contains(active_stories->story_ids_, story_id)) {
-    auto story_ids = active_stories->story_ids_;
-    td::remove(story_ids, story_id);
-    on_update_active_stories(owner_dialog_id, active_stories->max_read_story_id_, std::move(story_ids), Promise<Unit>(),
-                             "on_delete_story");
+  if (!is_bot) {
+    auto active_stories = get_active_stories_force(owner_dialog_id, "on_delete_story");
+    if (active_stories != nullptr && contains(active_stories->story_ids_, story_id)) {
+      auto story_ids = active_stories->story_ids_;
+      td::remove(story_ids, story_id);
+      on_update_active_stories(owner_dialog_id, active_stories->max_read_story_id_, std::move(story_ids),
+                               Promise<Unit>(), "on_delete_story");
+    }
   }
 
   delete_story_from_database(story_full_id);
@@ -4478,6 +4523,9 @@ td_api::object_ptr<td_api::updateChatActiveStories> StoryManager::get_update_cha
 
 void StoryManager::send_update_chat_active_stories(DialogId owner_dialog_id, const ActiveStories *active_stories,
                                                    const char *source) {
+  if (td_->auth_manager_->is_bot()) {
+    return;
+  }
   if (updated_active_stories_.count(owner_dialog_id) == 0) {
     if (active_stories == nullptr || active_stories->public_order_ == 0) {
       LOG(INFO) << "Skip update about active stories in " << owner_dialog_id << " from " << source;
@@ -4541,7 +4589,7 @@ void StoryManager::on_update_story_id(int64 random_id, StoryId new_story_id, con
   CHECK(is_deleted);
 
   if (!have_story_force(old_story_full_id)) {
-    LOG(INFO) << "Can't find sent story " << old_story_full_id;
+    LOG(INFO) << "Can't find sent " << old_story_full_id;
     // delete_sent_story_on_server(old_story_full_id, new_story_id);
     return;
   }
@@ -4780,7 +4828,7 @@ void StoryManager::on_view_dialog_active_stories(vector<DialogId> dialog_ids) {
   }
   LOG(DEBUG) << "View active stories of " << dialog_ids;
 
-  const size_t MAX_SLICE_SIZE = 100;  // server side limit
+  const size_t MAX_SLICE_SIZE = 100;  // server-side limit
   vector<DialogId> input_dialog_ids;
   vector<telegram_api::object_ptr<telegram_api::InputPeer>> input_peers;
   for (auto &dialog_id : dialog_ids) {
@@ -5102,7 +5150,7 @@ void StoryManager::save_channels_to_send_stories() {
 }
 
 void StoryManager::can_send_story(DialogId dialog_id,
-                                  Promise<td_api::object_ptr<td_api::CanSendStoryResult>> &&promise) {
+                                  Promise<td_api::object_ptr<td_api::CanPostStoryResult>> &&promise) {
   if (!td_->dialog_manager_->have_dialog_force(dialog_id, "can_send_story")) {
     return promise.set_error(Status::Error(400, "Chat not found"));
   }
@@ -5129,7 +5177,7 @@ void StoryManager::send_story(DialogId dialog_id, td_api::object_ptr<td_api::Inp
   TRY_RESULT_PROMISE(promise, content, get_input_story_content(td_, std::move(input_story_content), dialog_id));
   TRY_RESULT_PROMISE(promise, caption,
                      get_formatted_text(td_, DialogId(), std::move(input_caption), is_bot, true, false, false));
-  if (dialog_id != td_->dialog_manager_->get_my_dialog_id()) {
+  if (dialog_id != td_->dialog_manager_->get_my_dialog_id() && !is_bot) {
     settings = td_api::make_object<td_api::storyPrivacySettingsEveryone>();
   }
   TRY_RESULT_PROMISE(promise, privacy_rules,
@@ -5137,8 +5185,11 @@ void StoryManager::send_story(DialogId dialog_id, td_api::object_ptr<td_api::Inp
   unique_ptr<StoryForwardInfo> forward_info;
   StoryFullId forward_from_story_full_id;
   if (from_story_full_id != nullptr) {
+    if (is_bot) {
+      return promise.set_error(Status::Error(400, "Bots can't repost stories"));
+    }
     forward_from_story_full_id =
-        StoryFullId(DialogId(from_story_full_id->sender_chat_id_), StoryId(from_story_full_id->story_id_));
+        StoryFullId(DialogId(from_story_full_id->poster_chat_id_), StoryId(from_story_full_id->story_id_));
     const Story *story = get_story(forward_from_story_full_id);
     if (story == nullptr || story->content_ == nullptr) {
       return promise.set_error(Status::Error(400, "Story to repost not found"));
@@ -5154,7 +5205,7 @@ void StoryManager::send_story(DialogId dialog_id, td_api::object_ptr<td_api::Inp
     forward_info->hide_sender_if_needed(td_);
   }
   if (active_period != 86400 && !(G()->is_test_dc() && (active_period == 60 || active_period == 300))) {
-    bool is_premium = td_->option_manager_->get_option_boolean("is_premium");
+    bool is_premium = td_->option_manager_->get_option_boolean("is_premium") || is_bot;
     if (!is_premium || !td::contains(vector<int32>{6 * 3600, 12 * 3600, 2 * 86400}, active_period)) {
       return promise.set_error(Status::Error(400, "Invalid story active period specified"));
     }
@@ -5162,18 +5213,17 @@ void StoryManager::send_story(DialogId dialog_id, td_api::object_ptr<td_api::Inp
   TRY_RESULT_PROMISE(promise, story_id, get_next_yet_unsent_story_id(dialog_id));
   vector<MediaArea> areas;
   if (input_areas != nullptr) {
+    vector<MediaArea> old_media_areas;
     for (auto &input_area : input_areas->areas_) {
-      MediaArea media_area(td_, std::move(input_area), Auto());
+      MediaArea media_area(td_, std::move(input_area), old_media_areas);
       if (media_area.is_valid()) {
         areas.push_back(std::move(media_area));
       }
     }
   }
-  if (!td_->option_manager_->get_option_boolean("can_use_text_entities_in_story_caption")) {
+  if (!is_bot && !td_->option_manager_->get_option_boolean("can_use_text_entities_in_story_caption")) {
     caption.entities.clear();
   }
-
-  td_->dialog_manager_->force_create_dialog(dialog_id, "send_story");
 
   auto story = make_unique<Story>();
   if (dialog_id.get_type() == DialogType::Channel &&
@@ -5266,8 +5316,6 @@ void StoryManager::do_send_story(unique_ptr<PendingStory> &&pending_story, vecto
     send_update_story(story_full_id, story.get());
     stories_.set(story_full_id, std::move(story));
 
-    auto active_stories = get_active_stories_force(pending_story->dialog_id_, "do_send_story");
-
     CHECK(pending_story->dialog_id_.is_valid());
     CHECK(pending_story->random_id_ != 0);
     yet_unsent_stories_[pending_story->dialog_id_].insert(pending_story->send_story_num_);
@@ -5275,9 +5323,13 @@ void StoryManager::do_send_story(unique_ptr<PendingStory> &&pending_story, vecto
     being_sent_stories_[pending_story->random_id_] = story_full_id;
     being_sent_story_random_ids_[story_full_id] = pending_story->random_id_;
 
-    updated_active_stories_.insert(pending_story->dialog_id_);
-    send_update_chat_active_stories(pending_story->dialog_id_, active_stories, "do_send_story");
-    update_story_list_sent_total_count(StoryListId::main(), "do_send_story");
+    if (!td_->auth_manager_->is_bot()) {
+      auto active_stories = get_active_stories_force(pending_story->dialog_id_, "do_send_story");
+
+      updated_active_stories_.insert(pending_story->dialog_id_);
+      send_update_chat_active_stories(pending_story->dialog_id_, active_stories, "do_send_story");
+      update_story_list_sent_total_count(StoryListId::main(), "do_send_story");
+    }
   }
 
   auto file_upload_id = pending_story->file_upload_id_;
@@ -5471,6 +5523,7 @@ void StoryManager::edit_story(DialogId owner_dialog_id, StoryId story_id,
                               td_api::object_ptr<td_api::InputStoryContent> &&input_story_content,
                               td_api::object_ptr<td_api::inputStoryAreas> &&input_areas,
                               td_api::object_ptr<td_api::formattedText> &&input_caption, Promise<Unit> &&promise) {
+  CHECK(!td_->auth_manager_->is_bot());
   StoryFullId story_full_id{owner_dialog_id, story_id};
   const Story *story = get_story(story_full_id);
   if (story == nullptr || story->content_ == nullptr) {
@@ -5578,8 +5631,96 @@ void StoryManager::edit_story(DialogId owner_dialog_id, StoryId story_id,
   do_send_story(std::move(pending_story), {});
 }
 
+void StoryManager::edit_business_story(DialogId owner_dialog_id, StoryId story_id,
+                                       td_api::object_ptr<td_api::InputStoryContent> &&input_story_content,
+                                       td_api::object_ptr<td_api::inputStoryAreas> &&input_areas,
+                                       td_api::object_ptr<td_api::formattedText> &&input_caption,
+                                       td_api::object_ptr<td_api::StoryPrivacySettings> &&settings,
+                                       Promise<td_api::object_ptr<td_api::story>> &&promise) {
+  CHECK(td_->auth_manager_->is_bot());
+  StoryFullId story_full_id{owner_dialog_id, story_id};
+  if (!can_edit_story(story_full_id, nullptr)) {
+    return promise.set_error(Status::Error(400, "Story can't be edited"));
+  }
+
+  bool is_bot = true;
+  TRY_RESULT_PROMISE(promise, content, get_input_story_content(td_, std::move(input_story_content), owner_dialog_id));
+  vector<MediaArea> areas;
+  if (input_areas != nullptr) {
+    vector<MediaArea> old_media_areas;
+    for (auto &input_area : input_areas->areas_) {
+      MediaArea media_area(td_, std::move(input_area), old_media_areas);
+      if (media_area.is_valid()) {
+        areas.push_back(std::move(media_area));
+      }
+    }
+  }
+  TRY_RESULT_PROMISE(promise, caption,
+                     get_formatted_text(td_, DialogId(), std::move(input_caption), is_bot, true, false, false));
+  TRY_RESULT_PROMISE(promise, privacy_rules,
+                     UserPrivacySettingRules::get_user_privacy_setting_rules(td_, std::move(settings)));
+
+  auto edit_story_num = ++send_story_count_;
+  if (edit_story_num == 0) {
+    edit_story_num = ++send_story_count_;
+  }
+
+  auto &edited_story = being_edited_business_stories_[edit_story_num];
+  CHECK(edited_story == nullptr);
+  edited_story = make_unique<BeingEditedBusinessStory>();
+  edited_story->content_ = std::move(content);
+  edited_story->areas_ = std::move(areas);
+  edited_story->caption_ = std::move(caption);
+  edited_story->privacy_rules_ = std::move(privacy_rules);
+  edited_story->promise_ = std::move(promise);
+
+  auto new_story = make_unique<Story>();
+  new_story->content_ = copy_story_content(edited_story->content_.get());
+
+  auto pending_story =
+      td::make_unique<PendingStory>(owner_dialog_id, story_id, StoryFullId(), edit_story_num, 0, std::move(new_story));
+
+  do_send_story(std::move(pending_story), {});
+}
+
+void StoryManager::on_edit_business_story(unique_ptr<PendingStory> &&pending_story,
+                                          telegram_api::object_ptr<telegram_api::Updates> updates) {
+  CHECK(pending_story != nullptr);
+  if (pending_story->file_upload_id_.is_valid()) {
+    td_->file_manager_->delete_partial_remote_location(pending_story->file_upload_id_);
+  }
+  auto it = being_edited_business_stories_.find(pending_story->send_story_num_);
+  CHECK(it != being_edited_business_stories_.end());
+  auto promise = std::move(it->second->promise_);
+  being_edited_business_stories_.erase(it);
+
+  td_->updates_manager_->process_updates_users_and_chats(updates.get());
+
+  auto story = UpdatesManager::extract_story(updates.get(), pending_story->dialog_id_);
+  if (story == nullptr) {
+    LOG(ERROR) << "Receive unexpected edit story result: " << to_string(updates);
+    promise.set_error(Status::Error(400, "Failed to edit story"));
+  } else {
+    auto story_id = on_get_story(pending_story->dialog_id_, std::move(story));
+    if (story_id != pending_story->story_id_) {
+      LOG(ERROR) << "Receive unexpected " << story_id << " instead of " << pending_story->story_id_;
+      promise.set_error(Status::Error(400, "Failed to edit story"));
+    } else {
+      promise.set_value(get_story_object({pending_story->dialog_id_, story_id}));
+    }
+    on_delete_story({pending_story->dialog_id_, story_id});
+  }
+}
+
 void StoryManager::do_edit_story(unique_ptr<PendingStory> &&pending_story,
                                  telegram_api::object_ptr<telegram_api::InputFile> input_file) {
+  if (td_->auth_manager_->is_bot()) {
+    CHECK(pending_story->send_story_num_ != 0);
+    auto edited_story = being_edited_business_stories_[pending_story->send_story_num_].get();
+    CHECK(edited_story != nullptr);
+    td_->create_handler<EditBusinessStoryQuery>()->send(std::move(pending_story), std::move(input_file), edited_story);
+    return;
+  }
   StoryFullId story_full_id{pending_story->dialog_id_, pending_story->story_id_};
   const Story *story = get_story(story_full_id);
   auto it = being_edited_stories_.find(story_full_id);
@@ -5589,8 +5730,7 @@ void StoryManager::do_edit_story(unique_ptr<PendingStory> &&pending_story,
     td_->file_manager_->cancel_upload(pending_story->file_upload_id_);
     return;
   }
-  CHECK(story->content_ != nullptr);
-  td_->create_handler<EditStoryQuery>()->send(story, std::move(pending_story), std::move(input_file), it->second.get());
+  td_->create_handler<EditStoryQuery>()->send(std::move(pending_story), std::move(input_file), it->second.get());
 }
 
 void StoryManager::edit_story_cover(DialogId owner_dialog_id, StoryId story_id, double main_frame_timestamp,
@@ -5627,15 +5767,23 @@ void StoryManager::delete_pending_story(unique_ptr<PendingStory> &&pending_story
   if (G()->close_flag() && G()->use_message_database()) {
     return;
   }
+
+  CHECK(pending_story != nullptr);
   if (pending_story->file_upload_id_.is_valid()) {
     td_->file_manager_->delete_partial_remote_location(pending_story->file_upload_id_);
   }
-
-  CHECK(pending_story != nullptr);
   StoryFullId story_full_id{pending_story->dialog_id_, pending_story->story_id_};
   const Story *story = get_story(story_full_id);
   bool is_edit = pending_story->story_id_.is_server();
   if (is_edit) {
+    if (td_->auth_manager_->is_bot()) {
+      CHECK(status.is_error());
+      auto it = being_edited_business_stories_.find(pending_story->send_story_num_);
+      CHECK(it != being_edited_business_stories_.end());
+      it->second->promise_.set_error(std::move(status));
+      being_edited_business_stories_.erase(it);
+      return;
+    }
     auto it = being_edited_stories_.find(story_full_id);
     if (story == nullptr || it == being_edited_stories_.end() ||
         edit_generations_[story_full_id] != pending_story->random_id_) {
@@ -5672,9 +5820,9 @@ void StoryManager::delete_pending_story(unique_ptr<PendingStory> &&pending_story
                                       "delete_pending_story");
       send_closure(
           G()->td(), &Td::send_update,
-          td_api::make_object<td_api::updateStorySendFailed>(
+          td_api::make_object<td_api::updateStoryPostFailed>(
               std::move(story_object), td_api::make_object<td_api::error>(status.code(), status.message().str()),
-              get_can_send_story_result_object(status, true)));
+              get_can_post_story_result_object(status, true)));
     }
     auto it = yet_unsent_stories_.find(pending_story->dialog_id_);
     CHECK(it != yet_unsent_stories_.end());

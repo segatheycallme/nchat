@@ -79,6 +79,10 @@ it, for example:
 
     coredumpctl debug 35919
 
+Optionally, enable logging (to ./gdb.txt by default)
+
+    set logging enabled on
+
 Obtain callstacks from all threads and then exit:
 
     thread apply all bt
@@ -104,6 +108,10 @@ to open using:
 
     gdb $(which nchat) core
 
+Optionally, enable logging (to ./gdb.txt by default)
+
+    set logging enabled on
+
 Obtain callstacks from all threads and then exit:
 
     thread apply all bt
@@ -118,6 +126,10 @@ List core dumps:
 Identify the core dump and open it using the debugger `gdb`, for example:
 
     gdb $(which nchat) /var/lib/apport/coredump/core._usr_local_bin_nchat.1000.1fd09cc0-3f67-4bcc-8cfe-d2bc27766b69.11359.131042
+
+Optionally, enable logging (to ./gdb.txt by default)
+
+    set logging enabled on
 
 Obtain callstacks from all threads and then exit:
 

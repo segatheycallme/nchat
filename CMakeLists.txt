@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 project(nchat LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 14)
 include(CheckCXXSourceCompiles)
+include(TestBigEndian)
 
 # Paths
 if (NOT DEFINED CMAKE_INSTALL_LIBDIR)
@@ -39,6 +40,15 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Android")
   add_compile_definitions(_XOPEN_SOURCE_EXTENDED)
 endif()
 
+# Config - Components built as shared libraries
+option(HAS_SHARED_LIBS "Shared Libs" ON)
+message(STATUS "Shared Libs: ${HAS_SHARED_LIBS}")
+
+# Config - Build with Address Sanitizer (ASAN)
+# To set ASAN log path: ASAN_OPTIONS=log_path=asan.log ./build/bin/nchat
+option(HAS_ASAN "ASAN" OFF)
+message(STATUS "ASAN: ${HAS_ASAN}")
+
 # Optional component - Dummy Protocol
 option(HAS_DUMMY "Dummy" ON)
 message(STATUS "Dummy: ${HAS_DUMMY}")
@@ -53,7 +63,12 @@ message(STATUS "WhatsApp: ${HAS_WHATSAPP}")
 
 # Feature - Dynamic library load
 option(HAS_DYNAMICLOAD "Dynamic Load" ON)
-message(STATUS "Dynamic Load: ${HAS_DYNAMICLOAD}")
+if(HAS_DYNAMICLOAD AND NOT HAS_SHARED_LIBS)
+  set(HAS_DYNAMICLOAD OFF)
+  message(STATUS "Dynamic Load: ${HAS_DYNAMICLOAD} (Forced)")
+else()
+  message(STATUS "Dynamic Load: ${HAS_DYNAMICLOAD}")
+endif()
 
 # Feature - Multi protocol
 option(HAS_MULTIPROTOCOL "Multi Protocol" ON)
@@ -72,6 +87,49 @@ set(GO_VERSION_MIN 1.23)
 execute_process(COMMAND bash "-c" "go version 2> /dev/null | cut -c14- | cut -d' ' -f1 | tr -d '\n'" OUTPUT_VARIABLE GO_VERSION)
 if(HAS_WHATSAPP AND (NOT GO_VERSION VERSION_GREATER_EQUAL GO_VERSION_MIN))
   message(FATAL_ERROR "Go version ${GO_VERSION} (need >= ${GO_VERSION_MIN} to build WhatsApp).")
+endif()
+
+# Check Little/Big Endian for tdlib requirement
+test_big_endian(IS_BIG_ENDIAN)
+if(IS_BIG_ENDIAN)
+  message(STATUS "Endian: Big")
+  if(HAS_TELEGRAM)
+    message(WARNING "Telegram requires little endian, auto-disabling.")
+	set(HAS_TELEGRAM OFF)
+  endif()
+else()
+  message(STATUS "Endian: Little")
+endif()
+
+# Common compiler and linking flags
+if(HAS_ASAN)
+  set(NCHAT_CFLAGS -fsanitize=address -fno-omit-frame-pointer)
+  set(NCHAT_LDFLAGS -fsanitize=address)
+endif()
+
+# Helper function for applying common target properties
+function(target_common_config target)
+  # Build type specifics
+  if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_definitions(${target} PRIVATE NCHAT_BUILD_RELEASE=1)
+  elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_compile_definitions(${target} PRIVATE NCHAT_BUILD_RELWITHDEBINFO=1)
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(${target} PRIVATE NCHAT_BUILD_DEBUG=1)
+  endif()
+
+  # Compile options
+  target_compile_options(${target} PUBLIC ${NCHAT_CFLAGS})
+
+  # Linking
+  target_link_libraries(${target} PUBLIC ${NCHAT_LDFLAGS})
+endfunction()
+
+# Internal library linking type
+if(HAS_SHARED_LIBS)
+  set(LIBRARY_LINKING_TYPE SHARED)
+else()
+  set(LIBRARY_LINKING_TYPE STATIC)
 endif()
 
 # Application
@@ -219,6 +277,7 @@ if(HAS_COREDUMP)
 endif()
 
 # Common
+target_common_config(nchat)
 target_compile_definitions(nchat PRIVATE CMAKE_INSTALL_LIBDIR="${CMAKE_INSTALL_LIBDIR}"
                            GO_VERSION="${GO_VERSION}" GO_VERSION_MIN="${GO_VERSION_MIN}")
 
@@ -259,16 +318,24 @@ add_theme("zenbones-dark")
 add_theme("zenburned")
 
 # Uninstall
-add_custom_target(uninstall
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/bin/nchat"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_MANDIR}/man1/nchat.1"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libncutil${CMAKE_SHARED_LIBRARY_SUFFIX}"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libtdclientshared${CMAKE_SHARED_LIBRARY_SUFFIX}"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libtgchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libduchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libwmchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
-  COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/share/nchat"
-)
+if(HAS_SHARED_LIBS)
+  add_custom_target(uninstall
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/bin/nchat"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_MANDIR}/man1/nchat.1"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libncutil${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libtdclientshared${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libtgchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libduchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libwmchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/share/nchat"
+  )
+else()
+  add_custom_target(uninstall
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/bin/nchat"
+    COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_MANDIR}/man1/nchat.1"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/share/nchat"
+  )
+endif()
 
 # Dev Application
 if(CMAKE_BUILD_TYPE MATCHES "Debug")

@@ -1114,7 +1114,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
   // all other additions and edits can be merged to the first addition/edit
   // i.e. in edit+delete+add chain we want to remove deletion and merge addition to the edit
 
-  auto group_key = group_keys_[NotificationGroupId(group_id)];
+  const auto &group_key = group_keys_[NotificationGroupId(group_id)];
   bool is_hidden = group_key.last_notification_date == 0 || get_last_updated_group_key() < group_key;
   bool is_changed = true;
   while (is_changed) {
@@ -2908,22 +2908,20 @@ string NotificationManager::convert_loc_key(const string &loc_key) {
 void NotificationManager::add_push_notification_user(
     UserId sender_user_id, int64 sender_access_hash, const string &sender_name,
     telegram_api::object_ptr<telegram_api::UserProfilePhoto> &&sender_photo) {
-  int32 flags = USER_FLAG_IS_INACCESSIBLE;
+  int32 flags = 0;
   if (sender_access_hash != -1) {
     // set phone number flag to show that this is a full access hash
-    flags |= USER_FLAG_HAS_ACCESS_HASH | USER_FLAG_HAS_PHONE_NUMBER;
+    flags = telegram_api::user::ACCESS_HASH_MASK | telegram_api::user::PHONE_MASK;
   } else {
     sender_access_hash = 0;
   }
   auto user_name = sender_user_id.get() == 136817688 ? "Channel" : sender_name;
   auto user = telegram_api::make_object<telegram_api::user>(
-      flags, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-      false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-      false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-      false /*ignored*/, 0, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-      false /*ignored*/, false /*ignored*/, false /*ignored*/, sender_user_id.get(), sender_access_hash, user_name,
-      string(), string(), string(), std::move(sender_photo), nullptr, 0, Auto(), string(), string(), nullptr,
-      vector<telegram_api::object_ptr<telegram_api::username>>(), 0, nullptr, nullptr, 0, 0, 0);
+      flags, false, false, false, false, false, false, false, false, false, true /*min*/, false, false, false, false,
+      false, false, false, false, 0, false, false, false, false, false, false, false, sender_user_id.get(),
+      sender_access_hash, user_name, string(), string(), string(), std::move(sender_photo), nullptr, 0, Auto(),
+      string(), string(), nullptr, vector<telegram_api::object_ptr<telegram_api::username>>(), 0, nullptr, nullptr, 0,
+      0, 0);
   td_->user_manager_->on_get_user(std::move(user), "add_push_notification_user");
 }
 
@@ -3351,6 +3349,11 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
   if (begins_with(loc_key, "PHONE_CALL_") || begins_with(loc_key, "VIDEO_CALL_")) {
     // TODO PHONE_CALL_REQUEST/PHONE_CALL_DECLINE/PHONE_CALL_MISSED/VIDEO_CALL_REQUEST/VIDEO_CALL_MISSED notifications
     return Status::Error(406, "Phone call notification is not supported");
+  }
+
+  if (begins_with(loc_key, "CONF_CALL_") || begins_with(loc_key, "CONF_VIDEOCALL_")) {
+    // TODO CONF_CALL_REQUEST/CONF_CALL_MISSED/CONF_VIDEOCALL_REQUEST/CONF_VIDEOCALL_MISSED notifications
+    return Status::Error(406, "Group call notification is not supported");
   }
 
   if (begins_with(loc_key, "REACT_") || loc_key == "READ_REACTION") {

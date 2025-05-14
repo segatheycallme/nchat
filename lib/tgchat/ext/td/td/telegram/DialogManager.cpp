@@ -724,14 +724,8 @@ class GetBlockedDialogsQuery final : public Td::ResultHandler {
   void send(BlockListId block_list_id, int32 offset, int32 limit) {
     offset_ = offset;
     limit_ = limit;
-
-    int32 flags = 0;
-    if (block_list_id == BlockListId::stories()) {
-      flags |= telegram_api::contacts_getBlocked::MY_STORIES_FROM_MASK;
-    }
-
     send_query(G()->net_query_creator().create(
-        telegram_api::contacts_getBlocked(flags, false /*ignored*/, offset, limit), {{"me"}}));
+        telegram_api::contacts_getBlocked(0, block_list_id == BlockListId::stories(), offset, limit), {{"me"}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -783,11 +777,9 @@ class ReorderPinnedDialogsQuery final : public Td::ResultHandler {
 
   void send(FolderId folder_id, const vector<DialogId> &dialog_ids) {
     folder_id_ = folder_id;
-    int32 flags = telegram_api::messages_reorderPinnedDialogs::FORCE_MASK;
     send_query(G()->net_query_creator().create(
         telegram_api::messages_reorderPinnedDialogs(
-            flags, true /*ignored*/, folder_id.get(),
-            td_->dialog_manager_->get_input_dialog_peers(dialog_ids, AccessRights::Read)),
+            0, true, folder_id.get(), td_->dialog_manager_->get_input_dialog_peers(dialog_ids, AccessRights::Read)),
         {{folder_id_}}));
   }
 
@@ -1040,17 +1032,13 @@ class ToggleDialogIsBlockedQuery final : public Td::ResultHandler {
     auto input_peer = td_->dialog_manager_->get_input_peer(dialog_id, AccessRights::Know);
     CHECK(input_peer != nullptr && input_peer->get_id() != telegram_api::inputPeerEmpty::ID);
 
-    int32 flags = 0;
-    if (is_blocked_for_stories) {
-      flags |= telegram_api::contacts_block::MY_STORIES_FROM_MASK;
-    }
     vector<ChainId> chain_ids{{dialog_id, MessageContentType::Photo}, {dialog_id, MessageContentType::Text}, {"me"}};
     auto query =
         is_blocked || is_blocked_for_stories
             ? G()->net_query_creator().create(
-                  telegram_api::contacts_block(flags, false /*ignored*/, std::move(input_peer)), std::move(chain_ids))
+                  telegram_api::contacts_block(0, is_blocked_for_stories, std::move(input_peer)), std::move(chain_ids))
             : G()->net_query_creator().create(
-                  telegram_api::contacts_unblock(flags, false /*ignored*/, std::move(input_peer)),
+                  telegram_api::contacts_unblock(0, is_blocked_for_stories, std::move(input_peer)),
                   std::move(chain_ids));
     send_query(std::move(query));
   }
@@ -1099,12 +1087,8 @@ class ToggleDialogUnreadMarkQuery final : public Td::ResultHandler {
       return on_error(Status::Error(400, "Can't access the chat"));
     }
 
-    int32 flags = 0;
-    if (is_marked_as_unread) {
-      flags |= telegram_api::messages_markDialogUnread::UNREAD_MASK;
-    }
     send_query(G()->net_query_creator().create(
-        telegram_api::messages_markDialogUnread(flags, false /*ignored*/, std::move(input_peer)), {{dialog_id}}));
+        telegram_api::messages_markDialogUnread(0, is_marked_as_unread, std::move(input_peer)), {{dialog_id}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -1150,12 +1134,8 @@ class ToggleDialogPinQuery final : public Td::ResultHandler {
       return on_error(Status::Error(400, "Can't access the chat"));
     }
 
-    int32 flags = 0;
-    if (is_pinned) {
-      flags |= telegram_api::messages_toggleDialogPin::PINNED_MASK;
-    }
     send_query(G()->net_query_creator().create(
-        telegram_api::messages_toggleDialogPin(flags, false /*ignored*/, std::move(input_peer)), {{dialog_id}}));
+        telegram_api::messages_toggleDialogPin(0, is_pinned, std::move(input_peer)), {{dialog_id}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -1200,12 +1180,8 @@ class ToggleDialogTranslationsQuery final : public Td::ResultHandler {
       return on_error(Status::Error(400, "Can't access the chat"));
     }
 
-    int32 flags = 0;
-    if (!is_translatable) {
-      flags |= telegram_api::messages_togglePeerTranslations::DISABLED_MASK;
-    }
     send_query(G()->net_query_creator().create(
-        telegram_api::messages_togglePeerTranslations(flags, false /*ignored*/, std::move(input_peer)), {{dialog_id}}));
+        telegram_api::messages_togglePeerTranslations(0, !is_translatable, std::move(input_peer)), {{dialog_id}}));
   }
 
   void on_result(BufferSlice packet) final {
@@ -3334,8 +3310,7 @@ void DialogManager::on_get_blocked_dialogs(int32 offset, int32 limit, int32 tota
 void DialogManager::set_dialog_available_reactions_on_server(DialogId dialog_id,
                                                              const ChatReactions &available_reactions,
                                                              Promise<Unit> &&promise) {
-  td_->create_handler<SetChatAvailableReactionsQuery>(std::move(promise))
-      ->send(dialog_id, std::move(available_reactions));
+  td_->create_handler<SetChatAvailableReactionsQuery>(std::move(promise))->send(dialog_id, available_reactions);
 }
 
 void DialogManager::set_dialog_default_send_as_on_server(DialogId dialog_id, DialogId send_as_dialog_id,

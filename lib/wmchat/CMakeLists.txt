@@ -10,11 +10,14 @@ if(CCACHE_PROGRAM)
 endif()
 
 # Library
-add_library(wmchat SHARED
+add_library(wmchat ${LIBRARY_LINKING_TYPE}
   src/wmchat.cpp
   src/wmchat.h
 )
 install(TARGETS wmchat DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# Common
+target_common_config(wmchat)
 
 # Dependency libraries
 add_subdirectory(go)

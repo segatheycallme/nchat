@@ -40,6 +40,7 @@ class SendCodeQuery final : public Td::ResultHandler {
     auto ptr = result_ptr.move_as_ok();
     switch (ptr->get_id()) {
       case telegram_api::auth_sentCodeSuccess::ID:
+      case telegram_api::auth_sentCodePaymentRequired::ID:
         return on_error(Status::Error(500, "Receive invalid response"));
       case telegram_api::auth_sentCode::ID:
         return promise_.set_value(telegram_api::move_object_as<telegram_api::auth_sentCode>(ptr));
@@ -313,15 +314,15 @@ void PhoneNumberManager::check_code(string code, Promise<Unit> &&promise) {
   switch (type_) {
     case Type::ChangePhone:
       td_->create_handler<ChangePhoneQuery>(std::move(query_promise))
-          ->send(send_code_helper_.phone_number().str(), send_code_helper_.phone_code_hash().str(), code);
+          ->send(send_code_helper_.get_phone_number(), send_code_helper_.get_phone_code_hash(), code);
       break;
     case Type::VerifyPhone:
       td_->create_handler<VerifyPhoneQuery>(std::move(query_promise))
-          ->send(send_code_helper_.phone_number().str(), send_code_helper_.phone_code_hash().str(), code);
+          ->send(send_code_helper_.get_phone_number(), send_code_helper_.get_phone_code_hash(), code);
       break;
     case Type::ConfirmPhone:
       td_->create_handler<ConfirmPhoneQuery>(std::move(query_promise))
-          ->send(send_code_helper_.phone_code_hash().str(), code);
+          ->send(send_code_helper_.get_phone_code_hash(), code);
       break;
     default:
       UNREACHABLE();

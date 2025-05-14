@@ -374,7 +374,7 @@ int main(int argc, char* argv[])
 
   // Start protocol(s) and ui
   ui->Init();
-  std::unordered_map<std::string, std::shared_ptr<Protocol>>& protocols = ui->GetProtocols();
+  std::unordered_map<std::string, std::shared_ptr<Protocol>> protocols = ui->GetProtocols();
   bool hasProtocols = !protocols.empty();
   if (hasProtocols && exportDir.empty())
   {
@@ -409,7 +409,11 @@ int main(int argc, char* argv[])
     }
   }
 
+  // Clear cache message handler
+  MessageCache::SetMessageHandler(nullptr);
+
   // Cleanup ui
+  ui->Cleanup();
   ui.reset();
 
   // Perform export if requested

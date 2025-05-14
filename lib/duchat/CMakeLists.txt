@@ -10,11 +10,14 @@ if(CCACHE_PROGRAM)
 endif()
 
 # Library
-add_library(duchat SHARED
+add_library(duchat ${LIBRARY_LINKING_TYPE}
   src/duchat.cpp
   src/duchat.h
 )
 install(TARGETS duchat DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# Common
+target_common_config(duchat)
 
 # Headers
 target_include_directories(duchat PRIVATE "../common/src")
