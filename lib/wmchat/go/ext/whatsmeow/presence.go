@@ -7,6 +7,7 @@
 package whatsmeow
 
 import (
+	"context"
 	"fmt"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
@@ -61,7 +62,9 @@ func (cli *Client) handlePresence(node *waBinary.Node) {
 // You should call this at least once after connecting so that the server has your pushname.
 // Otherwise, other users will see "-" as the name.
 func (cli *Client) SendPresence(state types.Presence) error {
-	if len(cli.Store.PushName) == 0 {
+	if cli == nil {
+		return ErrClientIsNil
+	} else if len(cli.Store.PushName) == 0 {
 		return ErrNoPushName
 	}
 	if state == types.PresenceAvailable {
@@ -87,7 +90,10 @@ func (cli *Client) SendPresence(state types.Presence) error {
 //
 //	cli.SendPresence(types.PresenceAvailable)
 func (cli *Client) SubscribePresence(jid types.JID) error {
-	privacyToken, err := cli.Store.PrivacyTokens.GetPrivacyToken(jid)
+	if cli == nil {
+		return ErrClientIsNil
+	}
+	privacyToken, err := cli.Store.PrivacyTokens.GetPrivacyToken(context.TODO(), jid)
 	if err != nil {
 		return fmt.Errorf("failed to get privacy token: %w", err)
 	} else if privacyToken == nil {

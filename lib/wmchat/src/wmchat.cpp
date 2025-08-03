@@ -304,7 +304,7 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         LOG_DEBUG("get contacts");
         std::shared_ptr<GetContactsRequest> getContactsRequest = std::static_pointer_cast<GetContactsRequest>(
           p_RequestMessage);
-        MessageCache::FetchContacts(m_ProfileId);
+        CWmGetContacts(m_ConnId);
       }
       break;
 
@@ -669,6 +669,24 @@ void WmChat::SetProtocolUiControl(bool p_IsTakeControl)
   TimeUtil::Sleep(0.100); // wait more than GetKey timeout
 }
 
+void WmChat::AddContactInfo(const ContactInfo& p_ContactInfo)
+{
+  std::unique_lock<std::mutex> lock(m_Mutex);
+  m_ContactInfos.push_back(p_ContactInfo);
+}
+
+std::vector<ContactInfo> WmChat::GetContactInfos()
+{
+  std::unique_lock<std::mutex> lock(m_Mutex);
+  return m_ContactInfos;
+}
+
+void WmChat::ClearContactInfos()
+{
+  std::unique_lock<std::mutex> lock(m_Mutex);
+  m_ContactInfos.clear();
+}
+
 void WmChat::AddInstance(int p_ConnId, WmChat* p_Instance)
 {
   std::unique_lock<std::mutex> lock(s_ConnIdMapMutex);
@@ -688,7 +706,7 @@ WmChat* WmChat::GetInstance(int p_ConnId)
   return (it != s_ConnIdMap.end()) ? it->second : nullptr;
 }
 
-void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Phone, int p_IsSelf)
+void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Phone, int p_IsSelf, int p_IsNotify)
 {
   WmChat* instance = WmChat::GetInstance(p_ConnId);
   if (instance != nullptr)
@@ -697,15 +715,23 @@ void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Pho
     contactInfo.id = std::string(p_ChatId);
     contactInfo.name = std::string(p_Name);
     contactInfo.phone = std::string(p_Phone);
-    contactInfo.isSelf = (p_IsSelf == 1) ? true : false;
+    contactInfo.isSelf = (p_IsSelf == 1);
 
-    std::shared_ptr<NewContactsNotify> newContactsNotify =
-      std::make_shared<NewContactsNotify>(instance->GetProfileId());
-    newContactsNotify->contactInfos = std::vector<ContactInfo>({ contactInfo });
+    instance->AddContactInfo(contactInfo);
 
-    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
-    deferNotifyRequest->serviceMessage = newContactsNotify;
-    instance->SendRequest(deferNotifyRequest);
+    const bool isNotify = (p_IsNotify == 1);
+    if (isNotify)
+    {
+      std::shared_ptr<NewContactsNotify> newContactsNotify =
+        std::make_shared<NewContactsNotify>(instance->GetProfileId());
+      newContactsNotify->fullSync = true;
+      newContactsNotify->contactInfos = instance->GetContactInfos();
+      instance->ClearContactInfos();
+
+      std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+      deferNotifyRequest->serviceMessage = newContactsNotify;
+      instance->SendRequest(deferNotifyRequest);
+    }
   }
 
   free(p_ChatId);
@@ -741,20 +767,32 @@ void WmNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMute
 
 void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe,
                          char* p_QuotedId, char* p_FileId, char* p_FilePath, int p_FileStatus, int p_TimeSent,
-                         int p_IsRead)
+                         int p_IsRead, int p_IsEditCaption)
 {
   WmChat* instance = WmChat::GetInstance(p_ConnId);
   if (instance != nullptr)
   {
     std::string fileInfoStr;
-    std::string fileId = std::string(p_FileId);
-    if (!fileId.empty())
+    if (p_IsEditCaption)
     {
-      FileInfo fileInfo;
-      fileInfo.fileStatus = (FileStatus)p_FileStatus;
-      fileInfo.fileId = fileId;
-      fileInfo.filePath = std::string(p_FilePath);
-      fileInfoStr = ProtocolUtil::FileInfoToHex(fileInfo);
+      std::vector<ChatMessage> chatMessages;
+      if (MessageCache::GetOneMessage(instance->GetProfileId(), std::string(p_ChatId), std::string(p_MsgId),
+                                      chatMessages))
+      {
+        fileInfoStr = chatMessages.at(0).fileInfo;
+      }
+    }
+    else
+    {
+      std::string fileId = std::string(p_FileId);
+      if (!fileId.empty())
+      {
+        FileInfo fileInfo;
+        fileInfo.fileStatus = (FileStatus)p_FileStatus;
+        fileInfo.fileId = fileId;
+        fileInfo.filePath = std::string(p_FilePath);
+        fileInfoStr = ProtocolUtil::FileInfoToHex(fileInfo);
+      }
     }
 
     ChatMessage chatMessage;

@@ -1309,6 +1309,8 @@ void UiModel::Impl::MessageHandler(std::shared_ptr<ServiceMessage> p_ServiceMess
         {
           SetStatusOnline(profileId, true);
         }
+
+        m_ConnectTime[profileId] = TimeUtil::GetCurrentTimeMSec();
       }
       break;
 
@@ -1316,6 +1318,12 @@ void UiModel::Impl::MessageHandler(std::shared_ptr<ServiceMessage> p_ServiceMess
       {
         std::shared_ptr<NewContactsNotify> newContactsNotify = std::static_pointer_cast<NewContactsNotify>(
           p_ServiceMessage);
+        const bool fullSync = newContactsNotify->fullSync;
+        if (fullSync)
+        {
+          m_ContactInfos[profileId].clear();
+        }
+
         const std::vector<ContactInfo>& contactInfos = newContactsNotify->contactInfos;
         for (auto& contactInfo : contactInfos)
         {
@@ -1961,6 +1969,12 @@ void UiModel::Impl::UpdateChatInfoLastMessageTime(const std::string& p_ProfileId
       profileChatInfos[p_ChatId].lastMessageTime = lastMessageTimeSent;
     }
   }
+
+  // If message is received after connection time, ensure current chat is set
+  if ((m_ConnectTime.count(p_ProfileId) > 0) && (lastMessageTimeSent > m_ConnectTime[p_ProfileId]))
+  {
+    SetCurrentChatIndexIfNotSet();
+  }
 }
 
 void UiModel::Impl::UpdateChatInfoIsUnread(const std::string& p_ProfileId, const std::string& p_ChatId)
@@ -1981,25 +1995,30 @@ void UiModel::Impl::UpdateChatInfoIsUnread(const std::string& p_ProfileId, const
     static const bool mutedNotifyUnread = UiConfig::GetBool("muted_notify_unread");
     if (mutedNotifyUnread || !profileChatInfos[p_ChatId].isMuted || hasMention)
     {
-      if (!profileChatInfos[p_ChatId].isUnread && isUnread)
+      static const bool notifyEveryUnread = UiConfig::GetBool("notify_every_unread");
+      if (isUnread && (!profileChatInfos[p_ChatId].isUnread || notifyEveryUnread))
       {
-        static const bool terminalBellActive = UiConfig::GetBool("terminal_bell_active");
-        static const bool terminalBellInactive = UiConfig::GetBool("terminal_bell_inactive");
-        bool terminalBell = m_TerminalActive ? terminalBellActive : terminalBellInactive;
-        if (terminalBell)
+        const bool receivedAfterConnect = (m_ConnectTime.count(p_ProfileId) > 0) && (chatMessage.timeSent > m_ConnectTime[p_ProfileId]);
+        if (receivedAfterConnect)
         {
-          m_TriggerTerminalBell = true;
-        }
+          static const bool terminalBellActive = UiConfig::GetBool("terminal_bell_active");
+          static const bool terminalBellInactive = UiConfig::GetBool("terminal_bell_inactive");
+          bool terminalBell = m_TerminalActive ? terminalBellActive : terminalBellInactive;
+          if (terminalBell)
+          {
+            m_TriggerTerminalBell = true;
+          }
 
-        static const bool desktopNotifyActive = UiConfig::GetBool("desktop_notify_active");
-        static const bool desktopNotifyInactive = UiConfig::GetBool("desktop_notify_inactive");
-        bool desktopNotify = m_TerminalActive ? desktopNotifyActive : desktopNotifyInactive;
-        if (desktopNotify)
-        {
-          const std::string name = (chatMessage.senderId == p_ChatId)
-            ? GetContactName(p_ProfileId, chatMessage.senderId)
-            : GetContactName(p_ProfileId, p_ChatId) + " - " + GetContactName(p_ProfileId, chatMessage.senderId);
-          DesktopNotifyUnread(name, chatMessage.text);
+          static const bool desktopNotifyActive = UiConfig::GetBool("desktop_notify_active");
+          static const bool desktopNotifyInactive = UiConfig::GetBool("desktop_notify_inactive");
+          bool desktopNotify = m_TerminalActive ? desktopNotifyActive : desktopNotifyInactive;
+          if (desktopNotify)
+          {
+            const std::string name = (chatMessage.senderId == p_ChatId)
+              ? GetContactName(p_ProfileId, chatMessage.senderId)
+              : GetContactName(p_ProfileId, p_ChatId) + " - " + GetContactName(p_ProfileId, chatMessage.senderId);
+            DesktopNotifyUnread(name, chatMessage.text);
+          }
         }
       }
     }
@@ -2925,8 +2944,20 @@ void UiModel::Impl::SaveEditMessage()
     std::make_shared<EditMessageRequest>();
   editMessageRequest->chatId = chatId;
   editMessageRequest->msgId = m_EditMessageId;
-  editMessageRequest->chatMessage = chatMessage; // copy original message (time sent, quote id, etc)
-  editMessageRequest->chatMessage.text = EntryStrToSendStr(entryStr); // update text content
+
+  // copy original message (time sent, quote id, etc)
+  editMessageRequest->chatMessage = chatMessage;
+
+  // prepare a new FileInfo struct if original message has a file
+  if (!chatMessage.fileInfo.empty())
+  {
+    FileInfo fileInfo = ProtocolUtil::FileInfoFromHex(chatMessage.fileInfo);
+    fileInfo.fileType = FileUtil::GetMimeType(fileInfo.filePath);
+    editMessageRequest->chatMessage.fileInfo = ProtocolUtil::FileInfoToHex(fileInfo);
+  }
+
+  // update text content
+  editMessageRequest->chatMessage.text = EntryStrToSendStr(entryStr);
   SendProtocolRequest(profileId, editMessageRequest);
 
   SetEditMessageActive(false);
@@ -4375,7 +4406,7 @@ void UiModel::OnKeyFind()
   // Pre-req
   {
     std::unique_lock<owned_mutex> lock(m_ModelMutex);
-    if (GetImpl().GetEditMessageActive() || GetImpl().GetFindMessageActive()) return;
+    if (GetImpl().GetEditMessageActive()) return;
 
     GetImpl().SetFindMessageActive(true);
   }

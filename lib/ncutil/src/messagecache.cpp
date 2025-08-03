@@ -106,7 +106,7 @@ void MessageCache::AddFromServiceMessage(const std::string& p_ProfileId,
       {
         std::shared_ptr<NewContactsNotify> newContactsNotify =
           std::static_pointer_cast<NewContactsNotify>(p_ServiceMessage);
-        MessageCache::AddContacts(p_ProfileId, newContactsNotify->contactInfos);
+        MessageCache::AddContacts(p_ProfileId, newContactsNotify->fullSync, newContactsNotify->contactInfos);
       }
       break;
 
@@ -376,13 +376,14 @@ void MessageCache::AddChats(const std::string& p_ProfileId, const std::vector<Ch
   EnqueueRequest(addChatsRequest);
 }
 
-void MessageCache::AddContacts(const std::string& p_ProfileId,
+void MessageCache::AddContacts(const std::string& p_ProfileId, bool p_FullSync,
                                const std::vector<ContactInfo>& p_ContactInfos)
 {
   if (!m_CacheEnabled) return;
 
   std::shared_ptr<AddContactsRequest> addContactsRequest = std::make_shared<AddContactsRequest>();
   addContactsRequest->profileId = p_ProfileId;
+  addContactsRequest->fullSync = p_FullSync;
   addContactsRequest->contactInfos = p_ContactInfos;
   EnqueueRequest(addContactsRequest);
 }
@@ -558,6 +559,18 @@ bool MessageCache::FetchOneMessage(const std::string& p_ProfileId, const std::st
   {
     return false;
   }
+}
+
+bool MessageCache::GetOneMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
+                                 const std::string& p_MsgId, std::vector<ChatMessage>& p_ChatMessages)
+{
+  if (!m_CacheEnabled) return false;
+
+  std::unique_lock<std::mutex> lock(m_DbMutex);
+  if (!m_Dbs[p_ProfileId]) return false;
+
+  PerformFetchOneMessage(p_ProfileId, p_ChatId, p_MsgId, p_ChatMessages);
+  return !p_ChatMessages.empty();
 }
 
 void MessageCache::FindMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
@@ -1018,6 +1031,7 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
         std::unique_lock<std::mutex> lock(m_DbMutex);
         std::shared_ptr<AddContactsRequest> addContactsRequest =
           std::static_pointer_cast<AddContactsRequest>(p_Request);
+        const bool fullSync = addContactsRequest->fullSync;
         const std::string& profileId = addContactsRequest->profileId;
         if (!m_Dbs[profileId]) return;
 
@@ -1028,6 +1042,11 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
         try
         {
           *m_Dbs[profileId] << "BEGIN;";
+          if (fullSync)
+          {
+            *m_Dbs[profileId] << "DELETE FROM " + s_TableContacts + ";";
+          }
+
           for (const auto& contactInfo : addContactsRequest->contactInfos)
           {
             *m_Dbs[profileId] << "INSERT INTO " + s_TableContacts + " "

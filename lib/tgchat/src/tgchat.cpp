@@ -41,7 +41,7 @@
 
 // #define SIMULATED_SPONSORED_MESSAGES
 
-static const int s_TdlibDate = 20250501;
+static const int s_TdlibDate = 20250610;
 
 namespace detail
 {
@@ -205,6 +205,9 @@ private:
   std::map<std::string, std::set<std::string>> m_SponsoredMessageIds;
   int m_ProfileDirVersion = 0;
   bool m_WasOnline = false;
+  std::mutex m_Mutex;
+  size_t m_GetUserDetailsCurrent = 0;
+  size_t m_GetUserDetailsTotal = 0;
   static const int s_CacheDirVersion = 2;
 };
 
@@ -695,42 +698,70 @@ void TgChat::Impl::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessa
 
         std::shared_ptr<DeferGetUserDetailsRequest> deferGetUserDetailsRequest =
           std::static_pointer_cast<DeferGetUserDetailsRequest>(p_RequestMessage);
-
         const std::vector<std::string>& userIds = deferGetUserDetailsRequest->userIds;
+
+        {
+          std::unique_lock<std::mutex> lock(m_Mutex);
+          m_GetUserDetailsCurrent = 0;
+          m_GetUserDetailsTotal = userIds.size();
+        }
+
+        Status::Set(Status::FlagFetching);
+
         for (auto& userId : userIds)
         {
-          Status::Set(Status::FlagFetching);
           std::int64_t userIdNum = StrUtil::NumFromHex<int64_t>(userId);
-
           auto get_user = td::td_api::make_object<td::td_api::getUser>();
           get_user->user_id_ = userIdNum;
           SendQuery(std::move(get_user),
                     [this](Object object)
           {
-            Status::Clear(Status::FlagFetching);
+            if (object->get_id() != td::td_api::error::ID)
+            {
+              auto tuser = td::move_tl_object_as<td::td_api::user>(object);
+              if (tuser)
+              {
+                const int64_t contactId = tuser->id_;
+                ContactInfo contactInfo;
+                contactInfo.id = StrUtil::NumToHex(contactId);
+                contactInfo.name =
+                  tuser->first_name_ + (tuser->last_name_.empty() ? "" : " " + tuser->last_name_);
+                contactInfo.phone = tuser->phone_number_;
+                contactInfo.isSelf = IsSelf(contactId);
 
-            if (object->get_id() == td::td_api::error::ID) return;
+                std::unique_lock<std::mutex> lock(m_Mutex);
+                m_ContactInfos[contactId] = contactInfo;
+                lock.unlock();
+              }
+            }
 
-            auto tuser = td::move_tl_object_as<td::td_api::user>(object);
-
-            if (!tuser) return;
-
-            const int64_t contactId = tuser->id_;
-            ContactInfo contactInfo;
-            contactInfo.id = StrUtil::NumToHex(contactId);
-            contactInfo.name =
-              tuser->first_name_ + (tuser->last_name_.empty() ? "" : " " + tuser->last_name_);
-            contactInfo.phone = tuser->phone_number_;
-            contactInfo.isSelf = IsSelf(contactId);
-            m_ContactInfos[contactId] = contactInfo;
-
+            std::unique_lock<std::mutex> lock(m_Mutex);
             std::vector<ContactInfo> contactInfos;
-            contactInfos.push_back(contactInfo);
+            ++m_GetUserDetailsCurrent;
+            if (m_GetUserDetailsCurrent == m_GetUserDetailsTotal)
+            {
+              // Last request, consolidate info
+              m_GetUserDetailsCurrent = 0;
+              m_GetUserDetailsTotal = 0;
 
-            std::shared_ptr<NewContactsNotify> newContactsNotify =
-              std::make_shared<NewContactsNotify>(m_ProfileId);
-            newContactsNotify->contactInfos = contactInfos;
-            CallMessageHandler(newContactsNotify);
+              for (const auto& contactInfo : m_ContactInfos)
+              {
+                contactInfos.push_back(contactInfo.second);
+              }
+
+              Status::Clear(Status::FlagFetching);
+            }
+
+            lock.unlock();
+
+            if (!contactInfos.empty())
+            {
+              std::shared_ptr<NewContactsNotify> newContactsNotify =
+                std::make_shared<NewContactsNotify>(m_ProfileId);
+              newContactsNotify->fullSync = true;
+              newContactsNotify->contactInfos = contactInfos;
+              CallMessageHandler(newContactsNotify);
+            }
           });
         }
       }
@@ -876,20 +907,48 @@ void TgChat::Impl::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessa
         std::shared_ptr<EditMessageRequest> editMessageRequest =
           std::static_pointer_cast<EditMessageRequest>(p_RequestMessage);
 
-        auto edit_message = td::td_api::make_object<td::td_api::editMessageText>();
-        edit_message->chat_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->chatId);
-        edit_message->message_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->msgId);
-
-        auto message_content = GetMessageText(editMessageRequest->chatMessage.text);
-        edit_message->input_message_content_ = std::move(message_content);
-
-        SendQuery(std::move(edit_message),
-                  [](Object object)
+        if (editMessageRequest->chatMessage.fileInfo.empty())
         {
-          Status::Clear(Status::FlagSending);
+          auto edit_message = td::td_api::make_object<td::td_api::editMessageText>();
+          edit_message->chat_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->chatId);
+          edit_message->message_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->msgId);
 
-          if (object->get_id() == td::td_api::error::ID) return;
-        });
+          auto message_content = GetMessageText(editMessageRequest->chatMessage.text);
+          edit_message->input_message_content_ = std::move(message_content);
+
+          SendQuery(std::move(edit_message),
+                    [](Object object)
+          {
+            Status::Clear(Status::FlagSending);
+
+            if (object->get_id() == td::td_api::error::ID)
+            {
+              auto error = td::move_tl_object_as<td::td_api::error>(object);
+              LOG_WARNING("Edit message text error: %s", error->message_.c_str());
+            }
+          });
+        }
+        else
+        {
+          auto edit_message = td::td_api::make_object<td::td_api::editMessageCaption>();
+          edit_message->chat_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->chatId);
+          edit_message->message_id_ = StrUtil::NumFromHex<int64_t>(editMessageRequest->msgId);
+
+          auto message_content = GetFormattedText(editMessageRequest->chatMessage.text);
+          edit_message->caption_ = std::move(message_content);
+
+          SendQuery(std::move(edit_message),
+                    [](Object object)
+          {
+            Status::Clear(Status::FlagSending);
+
+            if (object->get_id() == td::td_api::error::ID)
+            {
+              auto error = td::move_tl_object_as<td::td_api::error>(object);
+              LOG_WARNING("Edit message caption error: %s", error->message_.c_str());
+            }
+          });
+        }
       }
       break;
 

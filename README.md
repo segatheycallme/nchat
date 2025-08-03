@@ -106,8 +106,8 @@ Supported Platforms
 nchat is developed and tested on Linux and macOS. Current version has been
 tested on:
 
-- macOS Sonoma 14.5
-- Ubuntu 22.04 LTS
+- macOS Sequoia 15.5
+- Ubuntu 24.04 LTS
 
 Install using Package Manager
 =============================
@@ -392,6 +392,7 @@ This configuration file holds general user interface settings. Default content:
     muted_indicate_unread=1
     muted_notify_unread=0
     muted_position_by_timestamp=1
+    notify_every_unread=1
     online_status_share=1
     online_status_dynamic=1
     phone_number_indicator=
@@ -586,6 +587,10 @@ Specifies whether to notify (terminal bell) new unread messages in muted chats.
 
 Specifies whether chat list position of muted chats should reflect the time of
 their last received/sent message. Otherwise muted chats are listed last.
+
+### notify_every_unread
+
+Specifies whether to notify upon receiving more messages in an unread chat.
 
 ### online_status_share
 
@@ -1015,6 +1020,71 @@ the QR code in the terminal:
 
     USE_QR_TERMINAL=1 nchat -s
 
+### 8. Build fails with `c++: fatal error: Killed signal terminated program cc1plus`?
+
+This often means that OOM killer has terminated the compilation due to the
+system running out of free RAM.
+
+If the system has **less than 4 GB RAM**, please refer to
+[Building on Low Memory Systems](/doc/LOWMEMORY.md).
+
+If the system has **4 GB RAM or more**, the problem can occur if parallelism
+is set too high, which is likely to be encountered when installing from the
+Arch Linux AUR package. A workaround for the AUR package is to manually
+restrict max number of parallel jobs to `available RAM in GB` divided by 4.
+For example a system with 8 GB would then need to use max 8 / 4 = 2 jobs:
+
+    CMAKE_BUILD_PARALLEL_LEVEL=2 yay -S nchat
+
+Alternatively one can [Build from Source](#build-from-source) using the
+`make.sh` script, which sets parallel job count based on the system
+capabilities.
+
+
+Project Scope
+=============
+
+Limitations
+-----------
+There are no plans to support the following features:
+- Facebook Messenger
+- Signal
+- Telegram secret chats
+- Voice / video calls
+
+Additionally, WhatsApp is only supported on macOS and glibc-based Linux
+systems. Thus, it is not supported on musl-based operating systems, such
+as Alpine Linux. See [issue #204](https://github.com/d99kris/nchat/issues/204)
+for technical details on this limitation.
+
+Roadmap
+-------
+There is currently no concrete roadmap for further feature development of
+nchat. It is not intended to be a full-featured client on par with official
+Telegram / WhatsApp clients, but rather a light-weight client providing
+essential functionality suitable for the terminal. However, feel free to
+submit feature requests if there's something missing, or help upvote
+[existing feature requests](https://github.com/d99kris/nchat/discussions/categories/ideas?discussions_q=is%3Aopen+category%3AIdeas),
+if it's useful and low effort it will be considered.
+
+
+Contributions
+=============
+Please refer to [Contributing Guidelines](/doc/CONTRIBUTING.md) and
+[Design Notes](/doc/DESIGN.md).
+
+
+Alternatives
+============
+Terminal-based Telegram clients:
+
+- [tg](https://github.com/paul-nameless/tg)
+- [tgt](https://github.com/FedericoBruzzone/tgt)
+
+Terminal-based WhatsApp clients:
+
+- [whatscli](https://github.com/normen/whatscli)
+
 
 Technical Details
 =================
@@ -1070,41 +1140,9 @@ Uncrustify is used to maintain consistent source code formatting, example:
     ./make.sh src
 
 
-Project Scope
-=============
-
-Limitations
------------
-There are no plans to support the following features:
-- Facebook Messenger
-- Signal
-- Telegram secret chats
-- Voice / video calls
-
-Additionally, WhatsApp is only supported on macOS and glibc-based Linux
-systems. Thus, it is not supported on musl-based operating systems, such
-as Alpine Linux. See [issue #204](https://github.com/d99kris/nchat/issues/204)
-for technical details on this limitation.
-
-Roadmap
--------
-There is currently no concrete roadmap for further feature development of
-nchat. It is not intended to be a full-featured client on par with official
-Telegram / WhatsApp clients, but rather a light-weight client providing
-essential functionality suitable for the terminal. However, feel free to
-submit feature requests if there's something missing, or help upvote
-[existing feature requests](https://github.com/d99kris/nchat/discussions/categories/ideas?discussions_q=is%3Aopen+category%3AIdeas), and if it's useful and low effort it can probably be added.
-
-
 License
 =======
 nchat is distributed under the MIT license. See LICENSE file.
-
-
-Contributions
-=============
-Please refer to [Contributing Guidelines](/doc/CONTRIBUTING.md) and
-[Design Notes](/doc/DESIGN.md).
 
 
 Keywords

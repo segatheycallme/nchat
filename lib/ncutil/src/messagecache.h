@@ -77,6 +77,7 @@ private:
   public:
     virtual RequestType GetRequestType() const { return AddContactsRequestType; }
     std::string profileId;
+    bool fullSync = false;
     std::vector<ContactInfo> contactInfos;
   };
 
@@ -204,7 +205,8 @@ public:
   static void AddMessages(const std::string& p_ProfileId, const std::string& p_ChatId, const std::string& p_FromMsgId,
                           const std::vector<ChatMessage>& p_ChatMessages);
   static void AddChats(const std::string& p_ProfileId, const std::vector<ChatInfo>& p_ChatInfos);
-  static void AddContacts(const std::string& p_ProfileId, const std::vector<ContactInfo>& p_ContactInfos);
+  static void AddContacts(const std::string& p_ProfileId, bool p_FullSync,
+                          const std::vector<ContactInfo>& p_ContactInfos);
   static bool FetchChats(const std::string& p_ProfileId, const std::unordered_set<std::string>& p_ChatIds);
   static bool FetchContacts(const std::string& p_ProfileId);
   static bool FetchMessagesFrom(const std::string& p_ProfileId, const std::string& p_ChatId,
@@ -212,6 +214,8 @@ public:
                                 const int p_Limit, const bool p_Sync);
   static bool FetchOneMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
                               const std::string& p_MsgId, const bool p_Sync);
+  static bool GetOneMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
+                            const std::string& p_MsgId, std::vector<ChatMessage>& p_ChatMessages);
   static void FindMessage(const std::string& p_ProfileId, const std::string& p_ChatId, const std::string& p_FromMsgId,
                           const std::string& p_LastMsgId, const std::string& p_FindText,
                           const std::string& p_FindMsgId);

@@ -47,7 +47,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-var whatsmeowDate int = 20250501
+var whatsmeowDate int = 20250801
 
 type JSONMessage []json.RawMessage
 type JSONMessageType string
@@ -328,13 +328,13 @@ func DownloadFromFileId(client *whatsmeow.Client, fileId string) (string, int) {
 }
 
 func DownloadFromFileInfo(client *whatsmeow.Client, info DownloadInfo) ([]byte, error) {
-
+	ctx := context.TODO()
 	if len(info.Url) > 0 {
 		LOG_TRACE(fmt.Sprintf("download url: %s", info.Url))
-		return client.DownloadMediaWithUrl(info.Url, info.MediaKey, info.MediaType, info.Size, info.FileEncSha256, info.FileSha256)
+		return client.DownloadMediaWithUrl(ctx, info.Url, info.MediaKey, info.MediaType, info.Size, info.FileEncSha256, info.FileSha256)
 	} else if len(info.DirectPath) > 0 {
 		LOG_TRACE(fmt.Sprintf("download directpath: %s", info.DirectPath))
-		return client.DownloadMediaWithPath(info.DirectPath, info.FileEncSha256, info.FileSha256, info.MediaKey, info.Size, info.MediaType, whatsmeow.GetMMSType(info.MediaType))
+		return client.DownloadMediaWithPath(ctx, info.DirectPath, info.FileEncSha256, info.FileSha256, info.MediaKey, info.Size, info.MediaType, whatsmeow.GetMMSType(info.MediaType))
 	} else {
 		LOG_WARNING(fmt.Sprintf("url and path not present"))
 		return nil, whatsmeow.ErrNoURLPresent
@@ -619,7 +619,7 @@ func (handler *WmEventHandler) HandleEvent(rawEvt interface{}) {
 			handler.HandleConnected()
 		} else if evt.Name == appstate.WAPatchRegular {
 			LOG_TRACE("AppStateSyncComplete WAPatchRegular")
-			handler.GetContacts()
+			handler.HandleSyncContacts()
 		}
 
 	case *events.PushNameSetting:
@@ -688,7 +688,7 @@ func (handler *WmEventHandler) HandleEvent(rawEvt interface{}) {
 
 	case *events.OfflineSyncCompleted:
 		LOG_TRACE(fmt.Sprintf("%#v", evt))
-		handler.GetContacts()
+		handler.HandleSyncContacts()
 
 	case *events.GroupInfo:
 		LOG_TRACE(fmt.Sprintf("%#v", evt))
@@ -806,7 +806,8 @@ func (handler *WmEventHandler) HandleHistorySync(historySync *events.HistorySync
 		if hasMessages {
 			isMuted := false
 			isPinned := false
-			settings, setErr := client.Store.ChatSettings.GetChatSettings(chatJid)
+			ctx := context.TODO()
+			settings, setErr := client.Store.ChatSettings.GetChatSettings(ctx, chatJid)
 			if setErr != nil {
 				LOG_WARNING(fmt.Sprintf("Get chat settings failed %#v", setErr))
 			} else {
@@ -922,12 +923,14 @@ func (handler *WmEventHandler) HandleGroupInfo(groupInfo *events.GroupInfo) {
 	isSelfChat := (chatId == selfId)
 	isSyncRead := false
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, groupInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: %s", chatId, text))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleDeleteChat(deleteChat *events.DeleteChat) {
@@ -1021,15 +1024,22 @@ func PhoneFromUserId(userId string) string {
 	return phone
 }
 
-func (handler *WmEventHandler) GetContacts() {
-	var client *whatsmeow.Client = GetClient(handler.connId)
-	connId := handler.connId
-	LOG_TRACE(fmt.Sprintf("GetContacts"))
+func (handler *WmEventHandler) HandleSyncContacts() {
+	LOG_TRACE(fmt.Sprintf("HandleSyncContacts"))
+	GetContacts(handler.connId)
+}
 
+func GetContacts(connId int) {
+	LOG_TRACE(fmt.Sprintf("GetContacts"))
 	CWmSetStatus(FlagFetching)
 
+	var client *whatsmeow.Client = GetClient(connId)
+
 	// contacts
-	contacts, contErr := client.Store.Contacts.GetAllContacts()
+	isSelf := BoolToInt(false)   // not self
+	isNotify := BoolToInt(false) // defer notification
+	ctx := context.TODO()
+	contacts, contErr := client.Store.Contacts.GetAllContacts(ctx)
 	if contErr != nil {
 		LOG_WARNING(fmt.Sprintf("get all contacts failed %#v", contErr))
 	} else {
@@ -1040,7 +1050,7 @@ func (handler *WmEventHandler) GetContacts() {
 				userId := JidToStr(jid)
 				phone := PhoneFromUserId(userId)
 				LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", userId, name))
-				CWmNewContactsNotify(connId, userId, name, phone, BoolToInt(false))
+				CWmNewContactsNotify(connId, userId, name, phone, isSelf, isNotify)
 				AddContactName(connId, userId, name)
 			} else {
 				LOG_WARNING(fmt.Sprintf("Skip CWmNewContactsNotify %s %#v", JidToStr(jid), contactInfo))
@@ -1048,20 +1058,12 @@ func (handler *WmEventHandler) GetContacts() {
 		}
 	}
 
-	// special handling for self
-	selfId := JidToStr(*client.Store.ID)
-	selfName := "" // overridden by ui
-	selfPhone := PhoneFromUserId(selfId)
-	LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", selfId, selfName))
-	CWmNewContactsNotify(connId, selfId, selfName, selfPhone, BoolToInt(true))
-	AddContactName(connId, selfId, selfName)
-
 	// special handling for official whatsapp account
 	whatsappId := "0@s.whatsapp.net"
 	whatsappName := "WhatsApp"
 	whatsappPhone := ""
 	LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", whatsappId, whatsappName))
-	CWmNewContactsNotify(connId, whatsappId, whatsappName, whatsappPhone, BoolToInt(false))
+	CWmNewContactsNotify(connId, whatsappId, whatsappName, whatsappPhone, isSelf, isNotify)
 	AddContactName(connId, whatsappId, whatsappName)
 
 	// special handling for status updates
@@ -1069,7 +1071,7 @@ func (handler *WmEventHandler) GetContacts() {
 	statusName := "Status Updates"
 	statusPhone := ""
 	LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", statusId, statusName))
-	CWmNewContactsNotify(connId, statusId, statusName, statusPhone, BoolToInt(false))
+	CWmNewContactsNotify(connId, statusId, statusName, statusPhone, isSelf, isNotify)
 	AddContactName(connId, statusId, statusName)
 
 	// groups
@@ -1083,7 +1085,7 @@ func (handler *WmEventHandler) GetContacts() {
 			groupName := group.GroupName.Name
 			groupPhone := ""
 			LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", groupId, groupName))
-			CWmNewContactsNotify(connId, groupId, groupName, groupPhone, BoolToInt(false))
+			CWmNewContactsNotify(connId, groupId, groupName, groupPhone, isSelf, isNotify)
 			AddContactName(connId, groupId, groupName)
 
 			if group.GroupEphemeral.IsEphemeral {
@@ -1091,6 +1093,16 @@ func (handler *WmEventHandler) GetContacts() {
 			}
 		}
 	}
+
+	// special handling for self
+	selfId := JidToStr(*client.Store.ID)
+	selfName := "" // overridden by ui
+	selfPhone := PhoneFromUserId(selfId)
+	isSelf = BoolToInt(true)   // self
+	isNotify = BoolToInt(true) // perform notification upon last contact
+	LOG_TRACE(fmt.Sprintf("Call CWmNewContactsNotify %s %s", selfId, selfName))
+	CWmNewContactsNotify(connId, selfId, selfName, selfPhone, isSelf, isNotify)
+	AddContactName(connId, selfId, selfName)
 
 	CWmClearStatus(FlagFetching)
 }
@@ -1162,12 +1174,14 @@ func (handler *WmEventHandler) HandleTextMessage(messageInfo types.MessageInfo, 
 	isSelfChat := (chatId == selfId)
 	timeSent := int(messageInfo.Timestamp.Unix())
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, messageInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: %s", chatId, text))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1188,6 +1202,7 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 
 	// text
 	text := img.GetCaption()
+	isEditCaption := (messageInfo.Edit == "1")
 
 	// context
 	quotedId := ""
@@ -1196,11 +1211,15 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 		quotedId = ci.GetStanzaId()
 	}
 
-	// file id, path and status
-	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
-	fileId := DownloadableMessageToFileId(client, img, filePath)
+	// file path, id and status
+	filePath := ""
+	fileId := ""
 	fileStatus := FileStatusNotDownloaded
+	if !isEditCaption {
+		var tmpPath string = GetPath(connId) + "/tmp"
+		filePath = fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+		fileId = DownloadableMessageToFileId(client, img, filePath)
+	}
 
 	// general
 	chatId := GetChatId(messageInfo.Chat, messageInfo.Sender)
@@ -1216,7 +1235,8 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: image", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1237,6 +1257,7 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 
 	// text
 	text := vid.GetCaption()
+	isEditCaption := (messageInfo.Edit == "1")
 
 	// context
 	quotedId := ""
@@ -1245,11 +1266,15 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 		quotedId = ci.GetStanzaId()
 	}
 
-	// file id, path and status
-	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
-	fileId := DownloadableMessageToFileId(client, vid, filePath)
+	// file path, id and status
+	filePath := ""
+	fileId := ""
 	fileStatus := FileStatusNotDownloaded
+	if !isEditCaption {
+		var tmpPath string = GetPath(connId) + "/tmp"
+		filePath = fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+		fileId = DownloadableMessageToFileId(client, vid, filePath)
+	}
 
 	// general
 	chatId := GetChatId(messageInfo.Chat, messageInfo.Sender)
@@ -1265,7 +1290,8 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: video", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleAudioMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1309,12 +1335,14 @@ func (handler *WmEventHandler) HandleAudioMessage(messageInfo types.MessageInfo,
 	isSelfChat := (chatId == selfId)
 	timeSent := int(messageInfo.Timestamp.Unix())
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, messageInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: audio", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleDocumentMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1332,6 +1360,7 @@ func (handler *WmEventHandler) HandleDocumentMessage(messageInfo types.MessageIn
 
 	// text
 	text := doc.GetCaption()
+	isEditCaption := (messageInfo.Edit == "1")
 
 	// context
 	quotedId := ""
@@ -1340,11 +1369,15 @@ func (handler *WmEventHandler) HandleDocumentMessage(messageInfo types.MessageIn
 		quotedId = ci.GetStanzaId()
 	}
 
-	// file id, path and status
-	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s-%s", tmpPath, messageInfo.ID, *doc.FileName)
-	fileId := DownloadableMessageToFileId(client, doc, filePath)
+	// file path, id and status
+	filePath := ""
+	fileId := ""
 	fileStatus := FileStatusNotDownloaded
+	if !isEditCaption {
+		var tmpPath string = GetPath(connId) + "/tmp"
+		filePath = fmt.Sprintf("%s/%s-%s", tmpPath, messageInfo.ID, *doc.FileName)
+		fileId = DownloadableMessageToFileId(client, doc, filePath)
+	}
 
 	// general
 	chatId := GetChatId(messageInfo.Chat, messageInfo.Sender)
@@ -1360,7 +1393,8 @@ func (handler *WmEventHandler) HandleDocumentMessage(messageInfo types.MessageIn
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: document", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleStickerMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1404,12 +1438,14 @@ func (handler *WmEventHandler) HandleStickerMessage(messageInfo types.MessageInf
 	isSelfChat := (chatId == selfId)
 	timeSent := int(messageInfo.Timestamp.Unix())
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, messageInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: sticker", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleTemplateMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1498,12 +1534,14 @@ func (handler *WmEventHandler) HandleTemplateMessage(messageInfo types.MessageIn
 	isSelfChat := (chatId == selfId)
 	timeSent := int(messageInfo.Timestamp.Unix())
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, messageInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: template", chatId))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func (handler *WmEventHandler) HandleReactionMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
@@ -1760,12 +1798,14 @@ func (handler *WmEventHandler) HandleUnsupportedMessage(messageInfo types.Messag
 	isSelfChat := (chatId == selfId)
 	timeSent := int(messageInfo.Timestamp.Unix())
 	isRead := IsRead(isSyncRead, isSelfChat, fromMe, messageInfo.Timestamp, GetTimeRead(connId, chatId))
+	isEditCaption := false
 
 	// reset typing if needed
 	ResetTypingStatus(connId, chatId, senderId, fromMe, isSyncRead)
 
 	LOG_TRACE(fmt.Sprintf("Call CWmNewMessagesNotify %s: %s", chatId, text))
-	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent, BoolToInt(isRead))
+	CWmNewMessagesNotify(connId, chatId, msgId, senderId, text, BoolToInt(fromMe), quotedId, fileId, filePath, fileStatus, timeSent,
+		BoolToInt(isRead), BoolToInt(isEditCaption))
 }
 
 func ResetTypingStatus(connId int, chatId string, userId string, fromMe bool, isSyncRead bool) {
@@ -1799,16 +1839,17 @@ func WmInit(path string, proxy string, sendType int) int {
 	var ncLogger logger.Loggable = &ncSignalLogger{}
 	logger.Setup(&ncLogger)
 
+	ctx := context.TODO()
 	dbLog := NcLogger()
 	sessionPath := path + "/session.db"
 	sqlAddress := fmt.Sprintf("file:%s?_foreign_keys=on", sessionPath)
-	container, sqlErr := sqlstore.New("sqlite3", sqlAddress, dbLog)
+	container, sqlErr := sqlstore.New(ctx, "sqlite3", sqlAddress, dbLog)
 	if sqlErr != nil {
 		LOG_WARNING(fmt.Sprintf("sqlite error %#v", sqlErr))
 		return -1
 	}
 
-	deviceStore, devErr := container.GetFirstDevice()
+	deviceStore, devErr := container.GetFirstDevice(ctx)
 	if devErr != nil {
 		LOG_WARNING(fmt.Sprintf("dev store error %#v", devErr))
 		return -1
@@ -1898,9 +1939,10 @@ func WmLogin(connId int) int {
 			for evt := range ch {
 				if evt.Event == whatsmeow.QRChannelEventCode {
 					if usePairingCode {
+						ctx := context.TODO()
 						phoneNumber := GetPhoneNumberFromPath(path)
 						showPushNotification := true
-						pairCode, pairErr := cli.PairPhone(phoneNumber, showPushNotification, whatsmeow.PairClientFirefox, GetClientDisplayName())
+						pairCode, pairErr := cli.PairPhone(ctx, phoneNumber, showPushNotification, whatsmeow.PairClientFirefox, GetClientDisplayName())
 						if pairErr != nil {
 							LOG_WARNING(fmt.Sprintf("pair phone error %#v", pairErr))
 							SetState(connId, Disconnected)
@@ -2051,6 +2093,7 @@ func WmSendMessage(connId int, chatId string, text string, quotedId string, quot
 	}
 
 	isSend := false
+	isEditCaption := false
 
 	// quote context
 	contextInfo := waE2E.ContextInfo{}
@@ -2085,16 +2128,16 @@ func WmSendMessage(connId int, chatId string, text string, quotedId string, quot
 		}
 
 		message.ExtendedTextMessage = &extendedTextMessage
-
 		isSend = true
+
 	} else {
 
 		var isSendType bool = IntToBool(GetSendType(connId))
-
 		mimeType := strings.Split(fileType, "/")[0] // image, text, application, etc.
-		if isSendType && (mimeType == "audio") {
-			LOG_TRACE("send audio " + fileType)
 
+		if isSendType && (mimeType == "audio") {
+
+			LOG_TRACE("send audio " + fileType)
 			data, err := os.ReadFile(filePath)
 			if err != nil {
 				LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
@@ -2119,100 +2162,138 @@ func WmSendMessage(connId int, chatId string, text string, quotedId string, quot
 			}
 
 			message.AudioMessage = &audioMessage
-
 			isSend = true
+
 		} else if isSendType && (mimeType == "video") {
-			LOG_TRACE("send video " + fileType)
 
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
-				return -1
-			}
+			videoMessage := waE2E.VideoMessage{}
 
-			uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
-			if upErr != nil {
-				LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
-				return -1
-			}
+			if len(editMsgId) > 0 {
 
-			videoMessage := waE2E.VideoMessage{
-				Caption:       proto.String(text),
-				URL:           proto.String(uploaded.URL),
-				DirectPath:    proto.String(uploaded.DirectPath),
-				MediaKey:      uploaded.MediaKey,
-				Mimetype:      proto.String(fileType),
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uint64(len(data))),
-				ContextInfo:   &contextInfo,
+				LOG_TRACE("edit video caption " + fileType)
+				videoMessage = waE2E.VideoMessage{
+					Caption: proto.String(text),
+				}
+				isEditCaption = true
+
+			} else {
+
+				LOG_TRACE("send video " + fileType)
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
+					return -1
+				}
+
+				uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
+				if upErr != nil {
+					LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
+					return -1
+				}
+
+				videoMessage = waE2E.VideoMessage{
+					Caption:       proto.String(text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(fileType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(data))),
+					ContextInfo:   &contextInfo,
+				}
 			}
 
 			message.VideoMessage = &videoMessage
-
 			isSend = true
+
 		} else if isSendType && (mimeType == "image") {
-			LOG_TRACE("send image " + fileType)
 
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
-				return -1
-			}
+			imageMessage := waE2E.ImageMessage{}
 
-			uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaImage)
-			if upErr != nil {
-				LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
-				return -1
-			}
+			if len(editMsgId) > 0 {
 
-			imageMessage := waE2E.ImageMessage{
-				Caption:       proto.String(text),
-				URL:           proto.String(uploaded.URL),
-				DirectPath:    proto.String(uploaded.DirectPath),
-				MediaKey:      uploaded.MediaKey,
-				Mimetype:      proto.String(fileType),
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uint64(len(data))),
-				ContextInfo:   &contextInfo,
+				LOG_TRACE("edit image caption " + fileType)
+				imageMessage = waE2E.ImageMessage{
+					Caption: proto.String(text),
+				}
+				isEditCaption = true
+
+			} else {
+
+				LOG_TRACE("send image " + fileType)
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
+					return -1
+				}
+
+				uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaImage)
+				if upErr != nil {
+					LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
+					return -1
+				}
+
+				imageMessage = waE2E.ImageMessage{
+					Caption:       proto.String(text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(fileType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(data))),
+					ContextInfo:   &contextInfo,
+				}
 			}
 
 			message.ImageMessage = &imageMessage
-
 			isSend = true
+
 		} else {
-			LOG_TRACE("send document " + fileType)
 
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
-				return -1
-			}
+			documentMessage := waE2E.DocumentMessage{}
 
-			uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaDocument)
-			if upErr != nil {
-				LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
-				return -1
-			}
+			if len(editMsgId) > 0 {
 
-			fileName := filepath.Base(filePath)
+				LOG_TRACE("edit document caption " + fileType)
+				documentMessage = waE2E.DocumentMessage{
+					Caption: proto.String(text),
+				}
+				isEditCaption = true
 
-			documentMessage := waE2E.DocumentMessage{
-				Caption:       proto.String(text),
-				URL:           proto.String(uploaded.URL),
-				DirectPath:    proto.String(uploaded.DirectPath),
-				MediaKey:      uploaded.MediaKey,
-				Mimetype:      proto.String(fileType),
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uint64(len(data))),
-				FileName:      proto.String(fileName),
-				ContextInfo:   &contextInfo,
+			} else {
+
+				LOG_TRACE("send document " + fileType)
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					LOG_WARNING(fmt.Sprintf("read file %s err %#v", filePath, err))
+					return -1
+				}
+
+				uploaded, upErr := client.Upload(context.Background(), data, whatsmeow.MediaDocument)
+				if upErr != nil {
+					LOG_WARNING(fmt.Sprintf("upload error %#v", upErr))
+					return -1
+				}
+
+				fileName := filepath.Base(filePath)
+
+				documentMessage = waE2E.DocumentMessage{
+					Caption:       proto.String(text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(fileType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(data))),
+					FileName:      proto.String(fileName),
+					ContextInfo:   &contextInfo,
+				}
 			}
 
 			message.DocumentMessage = &documentMessage
-
 			isSend = true
 		}
 	}
@@ -2243,6 +2324,9 @@ func WmSendMessage(connId int, chatId string, text string, quotedId string, quot
 		messageInfo.Chat = chatJid
 		messageInfo.IsFromMe = true
 		messageInfo.Sender = *client.Store.ID
+		if isEditCaption {
+			messageInfo.Edit = "1"
+		}
 
 		if len(editMsgId) > 0 {
 			messageInfo.ID = editMsgId
@@ -2256,6 +2340,31 @@ func WmSendMessage(connId int, chatId string, text string, quotedId string, quot
 		handler := GetHandler(connId)
 		handler.HandleMessage(messageInfo, &message, isSyncRead)
 	}
+
+	return 0
+}
+
+func WmGetContacts(connId int) int {
+
+	LOG_TRACE("get contacts " + strconv.Itoa(connId))
+
+	// sanity check arg
+	if connId == -1 {
+		LOG_WARNING("invalid connId")
+		return -1
+	}
+
+	// get client
+	client := GetClient(connId)
+
+	// sync contacts
+	err := client.FetchAppState(context.TODO(), appstate.WAPatchCriticalUnblockLow, true, false)
+	if err != nil {
+		LOG_WARNING(fmt.Sprintf("fetch contacts app state failed %#v", err))
+	}
+
+	// get contacts
+	GetContacts(connId)
 
 	return 0
 }
