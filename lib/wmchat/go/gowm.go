@@ -1862,8 +1862,8 @@ func WmInit(path string, proxy string, sendType int) int {
 		StorageQuotaMb:      proto.Uint32(102400),
 	}
 
-	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_FIREFOX.Enum()
-	store.DeviceProps.Os = proto.String(GetOSName())
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_IOS_PHONE.Enum()
+	store.DeviceProps.Os = proto.String("")
 
 	// create new whatsapp connection
 	clientLog := NcLogger()
