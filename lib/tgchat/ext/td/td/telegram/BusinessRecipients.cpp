@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -68,16 +68,16 @@ td_api::object_ptr<td_api::businessRecipients> BusinessRecipients::get_business_
   vector<int64> chat_ids;
   for (auto user_id : user_ids_) {
     DialogId dialog_id(user_id);
-    td->dialog_manager_->force_create_dialog(dialog_id, "get_business_recipients_object", true);
-    CHECK(td->dialog_manager_->have_dialog_force(dialog_id, "get_business_recipients_object"));
-    chat_ids.push_back(td->dialog_manager_->get_chat_id_object(dialog_id, "businessRecipients"));
+    td->dialog_manager_->force_create_dialog(dialog_id, "get_business_recipients_object 1", true);
+    CHECK(td->dialog_manager_->have_dialog_force(dialog_id, "get_business_recipients_object 1"));
+    chat_ids.push_back(td->dialog_manager_->get_chat_id_object(dialog_id, "businessRecipients 1"));
   }
   vector<int64> excluded_chat_ids;
   for (auto user_id : excluded_user_ids_) {
     DialogId dialog_id(user_id);
-    td->dialog_manager_->force_create_dialog(dialog_id, "get_business_recipients_object", true);
-    CHECK(td->dialog_manager_->have_dialog_force(dialog_id, "get_business_recipients_object"));
-    excluded_chat_ids.push_back(td->dialog_manager_->get_chat_id_object(dialog_id, "businessRecipients"));
+    td->dialog_manager_->force_create_dialog(dialog_id, "get_business_recipients_object 2", true);
+    CHECK(td->dialog_manager_->have_dialog_force(dialog_id, "get_business_recipients_object 2"));
+    excluded_chat_ids.push_back(td->dialog_manager_->get_chat_id_object(dialog_id, "businessRecipients 2"));
   }
   return td_api::make_object<td_api::businessRecipients>(std::move(chat_ids), std::move(excluded_chat_ids),
                                                          existing_chats_, new_chats_, contacts_, non_contacts_,

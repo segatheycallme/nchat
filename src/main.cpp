@@ -1,6 +1,6 @@
 // main.cpp
 //
-// Copyright (c) 2019-2025 Kristofer Berggren
+// Copyright (c) 2019-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -18,6 +18,7 @@
 
 #include "appconfig.h"
 #include "apputil.h"
+#include "debuginfo.h"
 #include "fileutil.h"
 #include "log.h"
 #include "messagecache.h"
@@ -37,6 +38,10 @@
 
 #ifdef HAS_WHATSAPP
 #include "wmchat.h"
+#endif
+
+#ifdef HAS_SIGNAL
+#include "sgchat.h"
 #endif
 
 static std::string GetFeatures();
@@ -121,6 +126,9 @@ static std::vector<std::shared_ptr<ProtocolBaseFactory>> GetProtocolFactorys()
 #endif
 #ifdef HAS_WHATSAPP
     std::shared_ptr<ProtocolBaseFactory>(new ProtocolFactory<WmChat>()),
+#endif
+#ifdef HAS_SIGNAL
+    std::shared_ptr<ProtocolBaseFactory>(new ProtocolFactory<SgChat>()),
 #endif
   };
 
@@ -273,6 +281,14 @@ int main(int argc, char* argv[])
   FileUtil::SetDownloadsDir(AppConfig::GetStr("downloads_dir"));
   static const bool isLogdumpEnabled = AppConfig::GetBool("logdump_enabled");
 
+  // Init debug info, log last version
+  DebugInfo::Init();
+  const std::string versionUsed = DebugInfo::GetStr("version_used");
+  if (!versionUsed.empty() && (versionUsed != AppUtil::GetAppVersion()))
+  {
+    LOG_INFO("last version %s", versionUsed.c_str());
+  }
+
   // Init core dump
   static const bool isCoredumpEnabled = AppConfig::GetBool("coredump_enabled");
   if (isCoredumpEnabled)
@@ -295,10 +311,14 @@ int main(int argc, char* argv[])
     if (!setupProtocol)
     {
       MessageCache::Cleanup();
+      DebugInfo::Cleanup();
       AppConfig::Cleanup();
       return 1;
     }
   }
+
+  // Init temp
+  FileUtil::InitTempDir();
 
   // Init ui
   std::shared_ptr<Ui> ui = std::make_shared<Ui>();
@@ -381,8 +401,13 @@ int main(int argc, char* argv[])
     // Sort protocols
     std::map<std::string, std::shared_ptr<Protocol>> protocolsSorted(protocols.begin(), protocols.end());
 
+    // Connecting status
+    for (auto& protocol : protocolsSorted)
+    {
+      Status::Set(protocol.first, Status::FlagConnecting);
+    }
+
     // Login
-    Status::Set(Status::FlagConnecting);
     std::thread loginThread([&]
     {
       for (auto& protocol : protocolsSorted)
@@ -422,8 +447,13 @@ int main(int argc, char* argv[])
     MessageCache::Export(exportDir);
   }
 
+  // Save last version
+  DebugInfo::SetStr("version_used", AppUtil::GetAppVersion());
+
   // Cleanup
+  FileUtil::CleanupTempDir();
   MessageCache::Cleanup();
+  DebugInfo::Cleanup();
   AppConfig::Cleanup();
   Profiles::Cleanup();
 
@@ -446,15 +476,15 @@ std::string GetFeatures()
 {
   std::string features =
 #if defined(HAS_TELEGRAM)
-    "Telegram ON, "
+    "telegram on, "
 #else
-    "Telegram OFF, "
+    "telegram off, "
 #endif
 
 #if defined(HAS_WHATSAPP)
-    "WhatsApp ON"
+    "whatsapp on"
 #else
-    "WhatsApp OFF"
+    "whatsapp off"
 #endif
   ;
 
@@ -621,6 +651,7 @@ void ShowHelp()
     "    KeyUp       select message\n"
     "    Alt-d       delete/leave current chat\n"
     "    Alt-e       external editor compose\n"
+    "    Alt-i       auto-compose reply\n"
     "    Alt-n       search contacts\n"
     "    Alt-t       external telephone call\n"
     "    Alt-/       find in chat\n"
@@ -665,9 +696,13 @@ void ShowVersion()
   std::cout <<
     AppUtil::GetAppName(true /*p_WithVersion*/) << "\n"
     "\n"
-    "Copyright (c) 2019-2025 Kristofer Berggren\n"
+    "Copyright (c) 2019-2026 Kristofer Berggren\n"
     "\n"
-    "nchat is distributed under the MIT license.\n"
+#ifdef HAS_SIGNAL
+    "Combined distribution subject to GNU AGPL v3 license.\n"
+#else
+    "Combined distribution subject to MIT license.\n"
+#endif
     "\n"
     "Written by Kristofer Berggren.\n";
 }

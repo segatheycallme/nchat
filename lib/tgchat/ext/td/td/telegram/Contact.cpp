@@ -1,11 +1,13 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/telegram/Contact.h"
 
+#include "td/telegram/DialogId.h"
+#include "td/telegram/MessageQuote.h"
 #include "td/telegram/misc.h"
 #include "td/telegram/secret_api.h"
 #include "td/telegram/Td.h"
@@ -26,6 +28,30 @@ Contact::Contact(string phone_number, string first_name, string last_name, strin
   if (!user_id_.is_valid()) {
     user_id_ = UserId();
   }
+}
+
+Contact::Contact(string phone_number, string first_name, string last_name, bool edit_note, FormattedText &&note)
+    : phone_number_(std::move(phone_number))
+    , first_name_(std::move(first_name))
+    , last_name_(std::move(last_name))
+    , edit_note_(edit_note)
+    , note_(std::move(note)) {
+}
+
+Status Contact::validate() {
+  if (!clean_input_string(phone_number_)) {
+    return Status::Error(400, "Phone number must be encoded in UTF-8");
+  }
+  if (!clean_input_string(first_name_)) {
+    return Status::Error(400, "First name must be encoded in UTF-8");
+  }
+  if (!clean_input_string(last_name_)) {
+    return Status::Error(400, "Last name must be encoded in UTF-8");
+  }
+  if (!clean_input_string(vcard_)) {
+    return Status::Error(400, "vCard must be encoded in UTF-8");
+  }
+  return Status::OK();
 }
 
 void Contact::set_user_id(UserId user_id) {
@@ -62,8 +88,16 @@ SecretInputMedia Contact::get_secret_input_media_contact() const {
                                        phone_number_, first_name_, last_name_, static_cast<int32>(0))};
 }
 
-tl_object_ptr<telegram_api::inputPhoneContact> Contact::get_input_phone_contact(int64 client_id) const {
-  return make_tl_object<telegram_api::inputPhoneContact>(client_id, phone_number_, first_name_, last_name_);
+tl_object_ptr<telegram_api::inputPhoneContact> Contact::get_input_phone_contact(const UserManager *user_manager,
+                                                                                int64 client_id) const {
+  int32 flags = 0;
+  telegram_api::object_ptr<telegram_api::textWithEntities> input_note;
+  if (edit_note_) {
+    flags |= telegram_api::inputPhoneContact::NOTE_MASK;
+    input_note = get_input_text_with_entities(user_manager, note_, "inputPhoneContact");
+  }
+  return make_tl_object<telegram_api::inputPhoneContact>(flags, client_id, phone_number_, first_name_, last_name_,
+                                                         std::move(input_note));
 }
 
 tl_object_ptr<telegram_api::inputBotInlineMessageMediaContact> Contact::get_input_bot_inline_message_media_contact(
@@ -88,33 +122,46 @@ bool operator!=(const Contact &lhs, const Contact &rhs) {
 StringBuilder &operator<<(StringBuilder &string_builder, const Contact &contact) {
   return string_builder << "Contact[phone_number = " << contact.phone_number_
                         << ", first_name = " << contact.first_name_ << ", last_name = " << contact.last_name_
-                        << ", vCard size = " << contact.vcard_.size() << contact.user_id_ << "]";
+                        << ", vCard size = " << contact.vcard_.size() << ' ' << contact.user_id_ << ']';
 }
 
-Result<Contact> get_contact(Td *td, td_api::object_ptr<td_api::contact> &&contact) {
+static Result<Contact> get_contact(Td *td, td_api::object_ptr<td_api::contact> &&contact) {
   if (contact == nullptr) {
     return Status::Error(400, "Contact must be non-empty");
-  }
-
-  if (!clean_input_string(contact->phone_number_)) {
-    return Status::Error(400, "Phone number must be encoded in UTF-8");
-  }
-  if (!clean_input_string(contact->first_name_)) {
-    return Status::Error(400, "First name must be encoded in UTF-8");
-  }
-  if (!clean_input_string(contact->last_name_)) {
-    return Status::Error(400, "Last name must be encoded in UTF-8");
-  }
-  if (!clean_input_string(contact->vcard_)) {
-    return Status::Error(400, "vCard must be encoded in UTF-8");
   }
   UserId user_id(contact->user_id_);
   if (user_id != UserId() && !td->user_manager_->have_user_force(user_id, "get_contact")) {
     return Status::Error(400, "User not found");
   }
 
-  return Contact(std::move(contact->phone_number_), std::move(contact->first_name_), std::move(contact->last_name_),
-                 std::move(contact->vcard_), user_id);
+  auto result = Contact(std::move(contact->phone_number_), std::move(contact->first_name_),
+                        std::move(contact->last_name_), std::move(contact->vcard_), user_id);
+  TRY_STATUS(result.validate());
+  return std::move(result);
+}
+
+Result<Contact> get_contact(Td *td, td_api::object_ptr<td_api::importedContact> &&contact) {
+  if (contact == nullptr) {
+    return Status::Error(400, "Contact must be non-empty");
+  }
+  bool edit_note = contact->note_ != nullptr;
+  TRY_RESULT(note_text, get_formatted_text(td, DialogId(), std::move(contact->note_), false, true, true, false));
+  MessageQuote::remove_unallowed_quote_entities(note_text);
+
+  auto result = Contact(std::move(contact->phone_number_), std::move(contact->first_name_),
+                        std::move(contact->last_name_), edit_note, std::move(note_text));
+  TRY_STATUS(result.validate());
+  return std::move(result);
+}
+
+Result<vector<Contact>> get_contacts(Td *td, vector<td_api::object_ptr<td_api::importedContact>> &&imported_contacts) {
+  vector<Contact> contacts;
+  contacts.reserve(imported_contacts.size());
+  for (auto &imported_contact : imported_contacts) {
+    TRY_RESULT(contact, get_contact(td, std::move(imported_contact)));
+    contacts.push_back(std::move(contact));
+  }
+  return contacts;
 }
 
 Result<Contact> process_input_message_contact(Td *td,

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -100,6 +100,8 @@ fileSourceQuickReplyMessage shortcut_id:int32 message_id:int53 = FileSource;    
 fileSourceStarTransaction chat_id:int53 transaction_id:string is_refund:Bool = FileSource; // payments.getStarsTransactionsByID
 fileSourceBotMediaPreview bot_user_id:int53 = FileSource;                                  // bots.getPreviewMedias
 fileSourceBotMediaPreviewInfo bot_user_id:int53 language_code:string = FileSource;         // bots.getPreviewMediaInfo
+fileSourceStoryAlbum chat_id:int53 story_album_id:int32 = FileSource;                      // stories.getAlbums, not reliable
+fileSourceSavedMusic user_id:int53 file_id:int32 = FileSource;                             // users.getSavedMusicByID
 */
 
 FileSourceId FileReferenceManager::get_current_file_source_id() const {
@@ -211,6 +213,17 @@ FileSourceId FileReferenceManager::create_bot_media_preview_info_file_source(Use
   return add_file_source_id(source, PSLICE() << "bot media preview info " << bot_user_id << " for " << language_code);
 }
 
+FileSourceId FileReferenceManager::create_story_album_file_source(StoryAlbumFullId story_album_full_id) {
+  FileSourceStoryAlbum source{story_album_full_id};
+  return add_file_source_id(source, PSLICE() << story_album_full_id);
+}
+
+FileSourceId FileReferenceManager::create_user_saved_music_file_source(UserId user_id, int64 document_id,
+                                                                       int64 access_hash) {
+  FileSourceUserSavedMusic source{document_id, access_hash, user_id};
+  return add_file_source_id(source, PSLICE() << "saved music " << document_id << " of " << user_id);
+}
+
 FileReferenceManager::Node &FileReferenceManager::add_node(NodeId node_id) {
   CHECK(node_id.is_valid());
   auto &node = nodes_[node_id];
@@ -314,9 +327,9 @@ void FileReferenceManager::run_node(NodeId node_id) {
     VLOG(file_references) << "Have no more file sources to repair file reference for file " << node_id;
     for (auto &p : node.query->promises) {
       if (node.file_source_ids.empty()) {
-        p.set_error(Status::Error(400, "File source is not found"));
+        p.set_error(400, "File source is not found");
       } else {
-        p.set_error(Status::Error(429, "Too Many Requests: retry after 1"));
+        p.set_error(429, "Too Many Requests: retry after 1");
       }
     }
     node.query = {};
@@ -325,7 +338,7 @@ void FileReferenceManager::run_node(NodeId node_id) {
   if (node.last_successful_repair_time >= Time::now() - 60) {
     VLOG(file_references) << "Recently repaired file reference for file " << node_id << ", do not try again";
     for (auto &p : node.query->promises) {
-      p.set_error(Status::Error(429, "Too Many Requests: retry after 60"));
+      p.set_error(429, "Too Many Requests: retry after 60");
     }
     node.query = {};
     return;
@@ -372,7 +385,7 @@ void FileReferenceManager::send_query(Destination dest, FileSourceId file_source
         send_closure_later(G()->chat_manager(), &ChatManager::reload_channel, source.channel_id, std::move(promise),
                            "FileSourceChannelPhoto");
       },
-      [&](const FileSourceWallpapers &source) { promise.set_error(Status::Error("Can't repair old wallpapers")); },
+      [&](const FileSourceWallpapers &source) { promise.set_error("Can't repair old wallpapers"); },
       [&](const FileSourceWebPage &source) {
         send_closure_later(G()->web_pages_manager(), &WebPagesManager::reload_web_page_by_url, source.url, false,
                            PromiseCreator::lambda([promise = std::move(promise)](Result<WebPageId> &&result) mutable {
@@ -444,6 +457,14 @@ void FileReferenceManager::send_query(Destination dest, FileSourceId file_source
       [&](const FileSourceBotMediaPreviewInfo &source) {
         send_closure_later(G()->bot_info_manager(), &BotInfoManager::reload_bot_media_preview_info, source.bot_user_id,
                            source.language_code, std::move(promise));
+      },
+      [&](const FileSourceStoryAlbum &source) {
+        send_closure_later(G()->story_manager(), &StoryManager::reload_story_album, source.story_album_full_id,
+                           std::move(promise), "FileSourceStoryAlbum");
+      },
+      [&](const FileSourceUserSavedMusic &source) {
+        send_closure_later(G()->user_manager(), &UserManager::reload_user_saved_music, source.user_id,
+                           source.document_id, source.access_hash, std::move(promise));
       }));
 }
 
@@ -524,7 +545,7 @@ void FileReferenceManager::reload_photo(PhotoSizeSource source, Promise<Unit> pr
     case PhotoSizeSource::Type::Legacy:
     case PhotoSizeSource::Type::FullLegacy:
     case PhotoSizeSource::Type::Thumbnail:
-      promise.set_error(Status::Error("Unexpected PhotoSizeSource type"));
+      promise.set_error("Unexpected PhotoSizeSource type");
       break;
     default:
       UNREACHABLE();
@@ -540,7 +561,7 @@ void FileReferenceManager::get_file_search_text(FileSourceId file_source_id, str
         send_closure_later(G()->messages_manager(), &MessagesManager::get_message_file_search_text,
                            source.message_full_id, std::move(unique_file_id), std::move(promise));
       },
-      [&](const auto &source) { promise.set_error(Status::Error(500, "Unsupported file source")); }));
+      [&](const auto &source) { promise.set_error(500, "Unsupported file source"); }));
 }
 
 td_api::object_ptr<td_api::message> FileReferenceManager::get_message_object(FileSourceId file_source_id) const {

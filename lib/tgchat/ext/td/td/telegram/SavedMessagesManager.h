@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -53,7 +53,7 @@ class SavedMessagesManager final : public Actor {
   void on_topic_message_updated(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id, MessageId message_id);
 
   void on_topic_message_deleted(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id, MessageId message_id,
-                                bool only_from_memory);
+                                bool only_from_memory, const char *source);
 
   void on_all_dialog_messages_deleted(DialogId dialog_id);
 
@@ -73,6 +73,9 @@ class SavedMessagesManager final : public Actor {
 
   void on_update_read_monoforum_outbox(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
                                        MessageId read_outbox_max_message_id);
+
+  void on_update_monoforum_nopaid_messages_exception(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
+                                                     bool nopaid_messages_exception);
 
   void on_update_topic_draft_message(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
                                      telegram_api::object_ptr<telegram_api::DraftMessage> &&draft_message,
@@ -132,13 +135,21 @@ class SavedMessagesManager final : public Actor {
                                                bool is_marked_as_unread, Promise<Unit> &&promise);
 
   Status set_monoforum_topic_draft_message(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
-                                           td_api::object_ptr<td_api::draftMessage> &&draft_message);
+                                           unique_ptr<DraftMessage> &&draft_message);
 
   void unpin_all_monoforum_topic_messages(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
                                           Promise<Unit> &&promise);
 
   void read_all_monoforum_topic_reactions(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
                                           Promise<Unit> &&promise);
+
+  void get_monoforum_topic_revenue(DialogId dialog_id, SavedMessagesTopicId saved_messages_topic_id,
+                                   Promise<td_api::object_ptr<td_api::starCount>> &&promise);
+
+  void toggle_monoforum_topic_nopaid_messages_exception(DialogId dialog_id,
+                                                        SavedMessagesTopicId saved_messages_topic_id,
+                                                        bool nopaid_messages_exception, bool refund_payments,
+                                                        Promise<Unit> &&promise);
 
   void get_monoforum_message_author(MessageFullId message_full_id, Promise<td_api::object_ptr<td_api::user>> &&promise);
 
@@ -159,6 +170,7 @@ class SavedMessagesManager final : public Actor {
     int32 unread_count_ = 0;
     int32 unread_reaction_count_ = 0;
     bool is_marked_as_unread_ = false;
+    bool nopaid_messages_exception_ = false;
 
     bool is_pinned_ = false;
   };
@@ -182,6 +194,7 @@ class SavedMessagesManager final : public Actor {
     int64 private_order_ = 0;
     bool is_server_message_count_inited_ = false;
     bool is_marked_as_unread_ = false;
+    bool nopaid_messages_exception_ = false;
     bool is_received_from_server_ = false;
     bool need_repair_unread_count_ = false;
     bool is_changed_ = false;
@@ -299,6 +312,8 @@ class SavedMessagesManager final : public Actor {
   void do_set_topic_read_outbox_max_message_id(SavedMessagesTopic *topic, MessageId read_outbox_max_message_id);
 
   void do_set_topic_is_marked_as_unread(SavedMessagesTopic *topic, bool is_marked_as_unread);
+
+  void do_set_topic_nopaid_messages_exception(SavedMessagesTopic *topic, bool nopaid_messages_exception);
 
   void do_set_topic_unread_reaction_count(SavedMessagesTopic *topic, int32 unread_reaction_count);
 

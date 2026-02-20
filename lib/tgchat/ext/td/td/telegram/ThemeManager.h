@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -51,10 +51,13 @@ class ThemeManager final : public Actor {
   };
   DialogBoostAvailableCounts get_dialog_boost_available_count(int32 level, bool for_megagroup);
 
+  void get_unique_gift_chat_themes(const string &offset, int32 limit,
+                                   Promise<td_api::object_ptr<td_api::giftChatThemes>> &&promise);
+
   void get_current_state(vector<td_api::object_ptr<td_api::Update>> &updates) const;
 
  private:
-  struct ChatTheme {
+  struct EmojiChatTheme {
     string emoji;
     int64 id = 0;
     ThemeSettings light_theme;
@@ -67,9 +70,9 @@ class ThemeManager final : public Actor {
     void parse(ParserT &parser);
   };
 
-  struct ChatThemes {
+  struct EmojiChatThemes {
     int64 hash = 0;
-    vector<ChatTheme> themes;
+    vector<EmojiChatTheme> themes;
 
     template <class StorerT>
     void store(StorerT &storer) const;
@@ -112,7 +115,6 @@ class ThemeManager final : public Actor {
   };
 
   friend bool operator==(const ProfileAccentColor &lhs, const ProfileAccentColor &rhs);
-
   friend bool operator!=(const ProfileAccentColor &lhs, const ProfileAccentColor &rhs);
 
   struct ProfileAccentColors {
@@ -161,9 +163,9 @@ class ThemeManager final : public Actor {
 
   void on_get_profile_accent_colors(Result<telegram_api::object_ptr<telegram_api::help_PeerColors>> result);
 
-  td_api::object_ptr<td_api::chatTheme> get_chat_theme_object(const ChatTheme &theme) const;
+  td_api::object_ptr<td_api::emojiChatTheme> get_emoji_chat_theme_object(const EmojiChatTheme &theme) const;
 
-  td_api::object_ptr<td_api::updateChatThemes> get_update_chat_themes_object() const;
+  td_api::object_ptr<td_api::updateEmojiChatThemes> get_update_emoji_chat_themes_object() const;
 
   static string get_chat_themes_database_key();
 
@@ -187,7 +189,7 @@ class ThemeManager final : public Actor {
 
   void send_update_profile_accent_colors() const;
 
-  ChatThemes chat_themes_;
+  EmojiChatThemes chat_themes_;
 
   AccentColors accent_colors_;
 

@@ -1,14 +1,16 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/telegram/ChatManager.h"
 
+#include "td/telegram/ActiveStoryState.h"
 #include "td/telegram/AuthManager.h"
 #include "td/telegram/BotVerification.h"
 #include "td/telegram/BotVerification.hpp"
+#include "td/telegram/ChatTheme.h"
 #include "td/telegram/Dependencies.h"
 #include "td/telegram/DialogAdministrator.h"
 #include "td/telegram/DialogInviteLink.hpp"
@@ -16,6 +18,7 @@
 #include "td/telegram/DialogLocation.h"
 #include "td/telegram/DialogManager.h"
 #include "td/telegram/DialogParticipantManager.h"
+#include "td/telegram/DialogPhoto.hpp"
 #include "td/telegram/EmojiStatus.h"
 #include "td/telegram/FileReferenceManager.h"
 #include "td/telegram/files/FileManager.h"
@@ -33,10 +36,10 @@
 #include "td/telegram/MissingInvitee.h"
 #include "td/telegram/OptionManager.h"
 #include "td/telegram/PeerColor.h"
-#include "td/telegram/Photo.h"
 #include "td/telegram/Photo.hpp"
 #include "td/telegram/PhotoSize.h"
 #include "td/telegram/ServerMessageId.h"
+#include "td/telegram/StarManager.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/StoryManager.h"
 #include "td/telegram/SuggestedAction.h"
@@ -223,12 +226,10 @@ class ToggleChannelUsernameQuery final : public Td::ResultHandler {
 
   void on_error(Status status) final {
     if (status.message() == "USERNAME_NOT_MODIFIED" || status.message() == "CHAT_NOT_MODIFIED") {
-      td_->chat_manager_->on_update_channel_username_is_active(channel_id_, std::move(username_), is_active_,
-                                                               std::move(promise_));
       return;
-    } else {
-      td_->chat_manager_->on_get_channel_error(channel_id_, status, "ToggleChannelUsernameQuery");
     }
+    td_->chat_manager_->on_get_channel_error(channel_id_, status, "ToggleChannelUsernameQuery");
+    td_->chat_manager_->reload_channel(channel_id_, Promise<Unit>(), "ToggleChannelUsernameQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -262,11 +263,10 @@ class DeactivateAllChannelUsernamesQuery final : public Td::ResultHandler {
 
   void on_error(Status status) final {
     if (status.message() == "USERNAME_NOT_MODIFIED" || status.message() == "CHAT_NOT_MODIFIED") {
-      td_->chat_manager_->on_deactivate_channel_usernames(channel_id_, std::move(promise_));
       return;
-    } else {
-      td_->chat_manager_->on_get_channel_error(channel_id_, status, "DeactivateAllChannelUsernamesQuery");
     }
+    td_->chat_manager_->on_get_channel_error(channel_id_, status, "DeactivateAllChannelUsernamesQuery");
+    td_->chat_manager_->reload_channel(channel_id_, Promise<Unit>(), "DeactivateAllChannelUsernamesQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -307,12 +307,10 @@ class ReorderChannelUsernamesQuery final : public Td::ResultHandler {
 
   void on_error(Status status) final {
     if (status.message() == "USERNAME_NOT_MODIFIED" || status.message() == "CHAT_NOT_MODIFIED") {
-      td_->chat_manager_->on_update_channel_active_usernames_order(channel_id_, std::move(usernames_),
-                                                                   std::move(promise_));
       return;
-    } else {
-      td_->chat_manager_->on_get_channel_error(channel_id_, status, "ReorderChannelUsernamesQuery");
     }
+    td_->chat_manager_->on_get_channel_error(channel_id_, status, "ReorderChannelUsernamesQuery");
+    td_->chat_manager_->reload_channel(channel_id_, Promise<Unit>(), "ReorderChannelUsernamesQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -549,6 +547,45 @@ class SetChannelBoostsToUnblockRestrictionsQuery final : public Td::ResultHandle
       }
     } else {
       td_->chat_manager_->on_get_channel_error(channel_id_, status, "SetChannelBoostsToUnblockRestrictionsQuery");
+    }
+    promise_.set_error(std::move(status));
+  }
+};
+
+class SetChannelMainProfileTabQuery final : public Td::ResultHandler {
+  Promise<Unit> promise_;
+  ChannelId channel_id_;
+
+ public:
+  explicit SetChannelMainProfileTabQuery(Promise<Unit> &&promise) : promise_(std::move(promise)) {
+  }
+
+  void send(ChannelId channel_id, ProfileTab main_profile_tab) {
+    channel_id_ = channel_id;
+    auto input_channel = td_->chat_manager_->get_input_channel(channel_id);
+    CHECK(input_channel != nullptr);
+    send_query(G()->net_query_creator().create(
+        telegram_api::channels_setMainProfileTab(std::move(input_channel), get_input_profile_tab(main_profile_tab)),
+        {{channel_id}}));
+  }
+
+  void on_result(BufferSlice packet) final {
+    auto result_ptr = fetch_result<telegram_api::channels_setMainProfileTab>(packet);
+    if (result_ptr.is_error()) {
+      return on_error(result_ptr.move_as_error());
+    }
+
+    promise_.set_value(Unit());
+  }
+
+  void on_error(Status status) final {
+    if (status.message() == "CHAT_NOT_MODIFIED") {
+      if (!td_->auth_manager_->is_bot()) {
+        promise_.set_value(Unit());
+        return;
+      }
+    } else {
+      td_->chat_manager_->on_get_channel_error(channel_id_, status, "SetChannelMainProfileTabQuery");
     }
     promise_.set_error(std::move(status));
   }
@@ -1679,7 +1716,7 @@ ChatManager::ChatManager(Td *td, ActorShared<> parent) : td_(td), parent_(std::m
     CHECK(query_ids.size() == 1);
     auto input_channel = get_input_channel(ChannelId(query_ids[0]));
     if (input_channel == nullptr) {
-      return promise.set_error(Status::Error(400, "Channel not found"));
+      return promise.set_error(400, "Channel not found");
     }
     td_->create_handler<GetChannelsQuery>(std::move(promise))->send(std::move(input_channel));
   });
@@ -2052,6 +2089,7 @@ void ChatManager::Channel::store(StorerT &storer) const {
     STORE_FLAG(has_monoforum_channel_id);
     STORE_FLAG(is_forum_tabs);
     STORE_FLAG(is_admined_monoforum);
+    STORE_FLAG(has_live_story);
     END_STORE_FLAGS();
   }
 
@@ -2201,6 +2239,7 @@ void ChatManager::Channel::parse(ParserT &parser) {
     PARSE_FLAG(has_monoforum_channel_id);
     PARSE_FLAG(is_forum_tabs);
     PARSE_FLAG(is_admined_monoforum);
+    PARSE_FLAG(has_live_story);
     END_PARSE_FLAGS();
   }
 
@@ -2346,6 +2385,8 @@ void ChatManager::ChannelFull::store(StorerT &storer) const {
   bool has_bot_verification = bot_verification != nullptr;
   bool has_gift_count = gift_count != 0;
   bool has_monoforum_channel_id = monoforum_channel_id.is_valid();
+  bool has_send_paid_message_stars = send_paid_message_stars != 0;
+  bool has_main_profile_tab = main_profile_tab != ProfileTab::Default;
   BEGIN_STORE_FLAGS();
   STORE_FLAG(has_description);
   STORE_FLAG(has_administrator_count);
@@ -2394,6 +2435,8 @@ void ChatManager::ChannelFull::store(StorerT &storer) const {
     STORE_FLAG(has_stargifts_available);
     STORE_FLAG(has_paid_messages_available);
     STORE_FLAG(has_monoforum_channel_id);
+    STORE_FLAG(has_send_paid_message_stars);
+    STORE_FLAG(has_main_profile_tab);
     END_STORE_FLAGS();
   }
   if (has_description) {
@@ -2464,6 +2507,12 @@ void ChatManager::ChannelFull::store(StorerT &storer) const {
   if (has_monoforum_channel_id) {
     store(monoforum_channel_id, storer);
   }
+  if (has_send_paid_message_stars) {
+    store(send_paid_message_stars, storer);
+  }
+  if (has_main_profile_tab) {
+    store(main_profile_tab, storer);
+  }
 }
 
 template <class ParserT>
@@ -2496,6 +2545,8 @@ void ChatManager::ChannelFull::parse(ParserT &parser) {
   bool has_bot_verification = false;
   bool has_gift_count = false;
   bool has_monoforum_channel_id = false;
+  bool has_send_paid_message_stars = false;
+  bool has_main_profile_tab = false;
   BEGIN_PARSE_FLAGS();
   PARSE_FLAG(has_description);
   PARSE_FLAG(has_administrator_count);
@@ -2544,6 +2595,8 @@ void ChatManager::ChannelFull::parse(ParserT &parser) {
     PARSE_FLAG(has_stargifts_available);
     PARSE_FLAG(has_paid_messages_available);
     PARSE_FLAG(has_monoforum_channel_id);
+    PARSE_FLAG(has_send_paid_message_stars);
+    PARSE_FLAG(has_main_profile_tab);
     END_PARSE_FLAGS();
   }
   if (has_description) {
@@ -2621,6 +2674,12 @@ void ChatManager::ChannelFull::parse(ParserT &parser) {
   }
   if (has_monoforum_channel_id) {
     parse(monoforum_channel_id, parser);
+  }
+  if (has_send_paid_message_stars) {
+    parse(send_paid_message_stars, parser);
+  }
+  if (has_main_profile_tab) {
+    parse(main_profile_tab, parser);
   }
 
   if (legacy_can_view_statistics) {
@@ -2743,6 +2802,19 @@ bool ChatManager::have_input_peer_channel(const Channel *c, ChannelId channel_id
   if (access_rights == AccessRights::Know) {
     return true;
   }
+  if (!from_linked && c->is_monoforum) {
+    if (td_->auth_manager_->is_bot()) {
+      return c->is_admined_monoforum;
+    }
+    auto monoforum_channel_id = c->monoforum_channel_id;
+    auto *monoforum_channel = get_channel(monoforum_channel_id);
+    if (monoforum_channel != nullptr) {
+      return have_input_peer_channel(monoforum_channel, monoforum_channel_id, AccessRights::Read, true);
+    }
+    LOG(INFO) << "Have no parent " << monoforum_channel_id;
+    return true;
+  }
+
   if (c->status.is_administrator()) {
     return true;
   }
@@ -2754,21 +2826,12 @@ bool ChatManager::have_input_peer_channel(const Channel *c, ChannelId channel_id
     return true;
   }
 
-  if (!from_linked && c->is_monoforum) {
-    auto monoforum_channel_id = get_monoforum_channel_id(channel_id);
-    auto *monoforum_channel = get_channel(monoforum_channel_id);
-    if (monoforum_channel != nullptr) {
-      return have_input_peer_channel(monoforum_channel, monoforum_channel_id, access_rights, true);
-    }
-    return true;
-  }
-
   bool is_public = is_channel_public(c);
   if (access_rights == AccessRights::Read) {
     if (is_public) {
       return true;
     }
-    if (!from_linked && c->has_linked_channel) {
+    if (!from_linked && c->has_linked_channel && c->is_megagroup) {
       auto linked_channel_id = get_linked_channel_id(channel_id);
       if (linked_channel_id.is_valid() && have_channel(linked_channel_id)) {
         if (have_input_peer_channel(get_channel(linked_channel_id), linked_channel_id, access_rights, true)) {
@@ -3034,15 +3097,15 @@ string ChatManager::get_channel_search_text(ChannelId channel_id) const {
   return PSTRING() << c->title << ' ' << implode(c->usernames.get_active_usernames());
 }
 
-string ChatManager::get_channel_first_username(ChannelId channel_id) const {
+Slice ChatManager::get_channel_first_username(ChannelId channel_id) const {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return string();
+    return Slice();
   }
   return c->usernames.get_first_username();
 }
 
-string ChatManager::get_channel_editable_username(ChannelId channel_id) const {
+Slice ChatManager::get_channel_editable_username(ChannelId channel_id) const {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
     return string();
@@ -3058,10 +3121,10 @@ void ChatManager::set_chat_description(ChatId chat_id, const string &description
   auto new_description = strip_empty_characters(description, MAX_DESCRIPTION_LENGTH);
   auto c = get_chat(chat_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!get_chat_permissions(c).can_change_info_and_settings()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to set chat description"));
+    return promise.set_error(400, "Not enough rights to set chat description");
   }
 
   td_->create_handler<EditChatAboutQuery>(std::move(promise))->send(DialogId(chat_id), new_description);
@@ -3070,14 +3133,14 @@ void ChatManager::set_chat_description(ChatId chat_id, const string &description
 void ChatManager::set_channel_username(ChannelId channel_id, const string &username, Promise<Unit> &&promise) {
   const auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to change supergroup username"));
+    return promise.set_error(400, "Not enough rights to change supergroup username");
   }
 
   if (!username.empty() && !is_allowed_username(username)) {
-    return promise.set_error(Status::Error(400, "Username is invalid"));
+    return promise.set_error(400, "Username is invalid");
   }
 
   td_->create_handler<UpdateChannelUsernameQuery>(std::move(promise))->send(channel_id, username);
@@ -3085,44 +3148,50 @@ void ChatManager::set_channel_username(ChannelId channel_id, const string &usern
 
 void ChatManager::toggle_channel_username_is_active(ChannelId channel_id, string &&username, bool is_active,
                                                     Promise<Unit> &&promise) {
-  const auto *c = get_channel(channel_id);
+  auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to change username"));
+    return promise.set_error(400, "Not enough rights to change username");
   }
-  if (!c->usernames.can_toggle(username)) {
-    return promise.set_error(Status::Error(400, "Wrong username specified"));
+  if (!c->usernames.can_toggle(false, username)) {
+    return promise.set_error(400, "Wrong username specified");
   }
+  on_update_channel_usernames(c, channel_id, c->usernames.toggle(false, username, is_active));
+  update_channel(c, channel_id);
   td_->create_handler<ToggleChannelUsernameQuery>(std::move(promise))->send(channel_id, std::move(username), is_active);
 }
 
 void ChatManager::disable_all_channel_usernames(ChannelId channel_id, Promise<Unit> &&promise) {
-  const auto *c = get_channel(channel_id);
+  auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to disable usernames"));
+    return promise.set_error(400, "Not enough rights to disable usernames");
   }
+  on_update_channel_usernames(c, channel_id, c->usernames.deactivate_all());
+  update_channel(c, channel_id);
   td_->create_handler<DeactivateAllChannelUsernamesQuery>(std::move(promise))->send(channel_id);
 }
 
 void ChatManager::reorder_channel_usernames(ChannelId channel_id, vector<string> &&usernames, Promise<Unit> &&promise) {
-  const auto *c = get_channel(channel_id);
+  auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to reorder usernames"));
+    return promise.set_error(400, "Not enough rights to reorder usernames");
   }
   if (!c->usernames.can_reorder_to(usernames)) {
-    return promise.set_error(Status::Error(400, "Invalid username order specified"));
+    return promise.set_error(400, "Invalid username order specified");
   }
   if (usernames.size() <= 1) {
     return promise.set_value(Unit());
   }
+  on_update_channel_usernames(c, channel_id, c->usernames.reorder_to(vector<string>(usernames)));
+  update_channel(c, channel_id);
   td_->create_handler<ReorderChannelUsernamesQuery>(std::move(promise))->send(channel_id, std::move(usernames));
 }
 
@@ -3130,10 +3199,10 @@ void ChatManager::on_update_channel_username_is_active(ChannelId channel_id, str
                                                        Promise<Unit> &&promise) {
   auto *c = get_channel(channel_id);
   CHECK(c != nullptr);
-  if (!c->usernames.can_toggle(username)) {
+  if (!c->usernames.can_toggle(false, username)) {
     return reload_channel(channel_id, std::move(promise), "on_update_channel_username_is_active");
   }
-  on_update_channel_usernames(c, channel_id, c->usernames.toggle(username, is_active));
+  on_update_channel_usernames(c, channel_id, c->usernames.toggle(false, username, is_active));
   update_channel(c, channel_id);
   promise.set_value(Unit());
 }
@@ -3161,18 +3230,18 @@ void ChatManager::on_update_channel_active_usernames_order(ChannelId channel_id,
 void ChatManager::set_channel_accent_color(ChannelId channel_id, AccentColorId accent_color_id,
                                            CustomEmojiId background_custom_emoji_id, Promise<Unit> &&promise) {
   if (!accent_color_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid accent color identifier specified"));
+    return promise.set_error(400, "Invalid accent color identifier specified");
   }
 
   const auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
   if (c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Accent color can be changed only in channel chats"));
+    return promise.set_error(400, "Accent color can be changed only in channel chats");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the channel"));
+    return promise.set_error(400, "Not enough rights in the channel");
   }
 
   td_->create_handler<UpdateChannelColorQuery>(std::move(promise))
@@ -3184,10 +3253,10 @@ void ChatManager::set_channel_profile_accent_color(ChannelId channel_id, AccentC
                                                    Promise<Unit> &&promise) {
   const auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the chat"));
+    return promise.set_error(400, "Not enough rights in the chat");
   }
 
   td_->create_handler<UpdateChannelColorQuery>(std::move(promise))
@@ -3198,10 +3267,10 @@ void ChatManager::set_channel_emoji_status(ChannelId channel_id, const unique_pt
                                            Promise<Unit> &&promise) {
   const auto *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the chat"));
+    return promise.set_error(400, "Not enough rights in the chat");
   }
 
   if (emoji_status != nullptr) {
@@ -3214,13 +3283,13 @@ void ChatManager::set_channel_emoji_status(ChannelId channel_id, const unique_pt
 void ChatManager::set_channel_sticker_set(ChannelId channel_id, StickerSetId sticker_set_id, Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Chat sticker set can be set only for supergroups"));
+    return promise.set_error(400, "Chat sticker set can be set only for supergroups");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to change supergroup sticker set"));
+    return promise.set_error(400, "Not enough rights to change supergroup sticker set");
   }
 
   telegram_api::object_ptr<telegram_api::InputStickerSet> input_sticker_set;
@@ -3229,13 +3298,13 @@ void ChatManager::set_channel_sticker_set(ChannelId channel_id, StickerSetId sti
   } else {
     input_sticker_set = td_->stickers_manager_->get_input_sticker_set(sticker_set_id);
     if (input_sticker_set == nullptr) {
-      return promise.set_error(Status::Error(400, "Sticker set not found"));
+      return promise.set_error(400, "Sticker set not found");
     }
   }
 
   auto channel_full = get_channel_full(channel_id, false, "set_channel_sticker_set");
   if (channel_full != nullptr && !channel_full->can_set_sticker_set) {
-    return promise.set_error(Status::Error(400, "Can't set supergroup sticker set"));
+    return promise.set_error(400, "Can't set supergroup sticker set");
   }
 
   td_->create_handler<SetChannelStickerSetQuery>(std::move(promise))
@@ -3246,14 +3315,13 @@ void ChatManager::set_channel_emoji_sticker_set(ChannelId channel_id, StickerSet
                                                 Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Cuctom emoji sticker set can be set only for supergroups"));
+    return promise.set_error(400, "Cuctom emoji sticker set can be set only for supergroups");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(
-        Status::Error(400, "Not enough rights to change custom emoji sticker set in the supergroup"));
+    return promise.set_error(400, "Not enough rights to change custom emoji sticker set in the supergroup");
   }
 
   telegram_api::object_ptr<telegram_api::InputStickerSet> input_sticker_set;
@@ -3262,7 +3330,7 @@ void ChatManager::set_channel_emoji_sticker_set(ChannelId channel_id, StickerSet
   } else {
     input_sticker_set = td_->stickers_manager_->get_input_sticker_set(sticker_set_id);
     if (input_sticker_set == nullptr) {
-      return promise.set_error(Status::Error(400, "Sticker set not found"));
+      return promise.set_error(400, "Sticker set not found");
     }
   }
 
@@ -3274,34 +3342,71 @@ void ChatManager::set_channel_unrestrict_boost_count(ChannelId channel_id, int32
                                                      Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Unrestrict boost count can be set only for supergroups"));
+    return promise.set_error(400, "Unrestrict boost count can be set only for supergroups");
   }
   if (!get_channel_status(c).can_restrict_members()) {
-    return promise.set_error(
-        Status::Error(400, "Not enough rights to change unrestrict boost count set in the supergroup"));
+    return promise.set_error(400, "Not enough rights to change unrestrict boost count set in the supergroup");
   }
   if (unrestrict_boost_count < 0 || unrestrict_boost_count > 8) {
-    return promise.set_error(Status::Error(400, "Invalid new value for the unrestrict boost count specified"));
+    return promise.set_error(400, "Invalid new value for the unrestrict boost count specified");
   }
 
   td_->create_handler<SetChannelBoostsToUnblockRestrictionsQuery>(std::move(promise))
       ->send(channel_id, unrestrict_boost_count);
 }
 
+void ChatManager::set_channel_main_profile_tab(ChannelId channel_id,
+                                               const td_api::object_ptr<td_api::ProfileTab> &main_profile_tab,
+                                               Promise<Unit> &&promise) {
+  auto c = get_channel(channel_id);
+  if (c == nullptr) {
+    return promise.set_error(400, "Supergroup not found");
+  }
+  if (get_channel_type(c) == ChannelType::Megagroup) {
+    return promise.set_error(400, "Main profile tab can't be changed in supergroups");
+  }
+  if (!c->status.can_change_info_and_settings_as_administrator()) {
+    return promise.set_error(400, "Not enough rights to change main profile tab");
+  }
+  TRY_RESULT_PROMISE(promise, profile_tab, get_profile_tab(main_profile_tab, get_channel_type(c)));
+
+  auto query_promise = PromiseCreator::lambda(
+      [actor_id = actor_id(this), channel_id, profile_tab, promise = std::move(promise)](Result<Unit> result) mutable {
+        if (result.is_ok()) {
+          send_closure(actor_id, &ChatManager::on_set_channel_main_profile_tab, channel_id, profile_tab,
+                       std::move(promise));
+        } else {
+          promise.set_error(result.move_as_error());
+        }
+      });
+  td_->create_handler<SetChannelMainProfileTabQuery>(std::move(query_promise))->send(channel_id, profile_tab);
+}
+
+void ChatManager::on_set_channel_main_profile_tab(ChannelId channel_id, ProfileTab main_profile_tab,
+                                                  Promise<Unit> &&promise) {
+  ChannelFull *channel_full = get_channel_full_force(channel_id, true, "on_set_channel_main_profile_tab");
+  if (channel_full != nullptr && channel_full->main_profile_tab != main_profile_tab) {
+    channel_full->main_profile_tab = main_profile_tab;
+    channel_full->is_changed = true;
+    update_channel_full(channel_full, channel_id, "on_set_channel_main_profile_tab");
+  }
+  promise.set_value(Unit());
+}
+
 void ChatManager::toggle_channel_sign_messages(ChannelId channel_id, bool sign_messages, bool show_message_sender,
                                                Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (get_channel_type(c) == ChannelType::Megagroup) {
-    return promise.set_error(Status::Error(400, "Message signatures can't be toggled in supergroups"));
+    return promise.set_error(400, "Message signatures can't be toggled in supergroups");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to toggle channel sign messages"));
+    return promise.set_error(400, "Not enough rights to toggle channel sign messages");
   }
 
   td_->create_handler<ToggleChannelSignaturesQuery>(std::move(promise))
@@ -3311,13 +3416,13 @@ void ChatManager::toggle_channel_sign_messages(ChannelId channel_id, bool sign_m
 void ChatManager::toggle_channel_join_to_send(ChannelId channel_id, bool join_to_send, Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
-  if (get_channel_type(c) == ChannelType::Broadcast || c->is_gigagroup) {
-    return promise.set_error(Status::Error(400, "The method can be called only for ordinary supergroups"));
+  if (get_channel_type(c) == ChannelType::Broadcast || c->is_gigagroup || c->is_monoforum) {
+    return promise.set_error(400, "The method can be called only for ordinary supergroups");
   }
   if (!get_channel_status(c).can_restrict_members()) {
-    return promise.set_error(Status::Error(400, "Not enough rights"));
+    return promise.set_error(400, "Not enough rights");
   }
 
   td_->create_handler<ToggleChannelJoinToSendQuery>(std::move(promise))->send(channel_id, join_to_send);
@@ -3326,13 +3431,13 @@ void ChatManager::toggle_channel_join_to_send(ChannelId channel_id, bool join_to
 void ChatManager::toggle_channel_join_request(ChannelId channel_id, bool join_request, Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
-  if (get_channel_type(c) == ChannelType::Broadcast || c->is_gigagroup) {
-    return promise.set_error(Status::Error(400, "The method can be called only for ordinary supergroups"));
+  if (get_channel_type(c) == ChannelType::Broadcast || c->is_gigagroup || c->is_monoforum) {
+    return promise.set_error(400, "The method can be called only for ordinary supergroups");
   }
   if (!get_channel_status(c).can_restrict_members()) {
-    return promise.set_error(Status::Error(400, "Not enough rights"));
+    return promise.set_error(400, "Not enough rights");
   }
 
   td_->create_handler<ToggleChannelJoinRequestQuery>(std::move(promise))->send(channel_id, join_request);
@@ -3342,20 +3447,19 @@ void ChatManager::toggle_channel_is_all_history_available(ChannelId channel_id, 
                                                           Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to toggle all supergroup history availability"));
+    return promise.set_error(400, "Not enough rights to toggle all supergroup history availability");
   }
   if (get_channel_type(c) != ChannelType::Megagroup) {
-    return promise.set_error(Status::Error(400, "Message history can be hidden in supergroups only"));
+    return promise.set_error(400, "Message history can be hidden in supergroups only");
   }
   if ((c->is_forum || c->is_monoforum) && !is_all_history_available) {
-    return promise.set_error(
-        Status::Error(400, "Message history can't be hidden in forum and channel direct messages supergroups"));
+    return promise.set_error(400, "Message history can't be hidden in forum and channel direct messages supergroups");
   }
   if (c->has_linked_channel && !is_all_history_available) {
-    return promise.set_error(Status::Error(400, "Message history can't be hidden in discussion supergroups"));
+    return promise.set_error(400, "Message history can't be hidden in discussion supergroups");
   }
   // it can be toggled in public chats, but will not affect them
 
@@ -3366,13 +3470,13 @@ void ChatManager::toggle_channel_can_have_sponsored_messages(ChannelId channel_i
                                                              Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to disable sponsored messages"));
+    return promise.set_error(400, "Not enough rights to disable sponsored messages");
   }
   if (get_channel_type(c) != ChannelType::Broadcast) {
-    return promise.set_error(Status::Error(400, "Sponsored messages can be disabled only in channels"));
+    return promise.set_error(400, "Sponsored messages can be disabled only in channels");
   }
 
   td_->create_handler<RestrictSponsoredMessagesQuery>(std::move(promise))
@@ -3383,13 +3487,13 @@ void ChatManager::toggle_channel_has_automatic_translation(ChannelId channel_id,
                                                            Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->status.can_change_info_and_settings_as_administrator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to change automatic translation"));
+    return promise.set_error(400, "Not enough rights to change automatic translation");
   }
   if (get_channel_type(c) != ChannelType::Broadcast) {
-    return promise.set_error(Status::Error(400, "Automatic translation can be enabled only in channels"));
+    return promise.set_error(400, "Automatic translation can be enabled only in channels");
   }
 
   td_->create_handler<ToggleAutotranslationQuery>(std::move(promise))->send(channel_id, has_automatic_translation);
@@ -3494,16 +3598,16 @@ void ChatManager::toggle_channel_is_forum(ChannelId channel_id, bool is_forum, b
                                           Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (c->is_forum == is_forum && c->is_forum_tabs == is_forum_tabs) {
     return promise.set_value(Unit());
   }
   if (!get_channel_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to convert the group to a forum"));
+    return promise.set_error(400, "Not enough rights to convert the group to a forum");
   }
   if (get_channel_type(c) != ChannelType::Megagroup) {
-    return promise.set_error(Status::Error(400, "Forums can be enabled in supergroups only"));
+    return promise.set_error(400, "Forums can be enabled in supergroups only");
   }
 
   td_->create_handler<ToggleForumQuery>(std::move(promise))->send(channel_id, is_forum, is_forum_tabs);
@@ -3511,7 +3615,7 @@ void ChatManager::toggle_channel_is_forum(ChannelId channel_id, bool is_forum, b
 
 void ChatManager::convert_channel_to_gigagroup(ChannelId channel_id, Promise<Unit> &&promise) {
   if (!can_convert_channel_to_gigagroup(channel_id)) {
-    return promise.set_error(Status::Error(400, "Can't convert the chat to a broadcast group"));
+    return promise.set_error(400, "Can't convert the chat to a broadcast group");
   }
 
   td_->suggested_action_manager_->remove_dialog_suggested_action(
@@ -3524,10 +3628,10 @@ void ChatManager::set_channel_description(ChannelId channel_id, const string &de
   auto new_description = strip_empty_characters(description, MAX_DESCRIPTION_LENGTH);
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!get_channel_permissions(channel_id, c).can_change_info_and_settings()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to set chat description"));
+    return promise.set_error(400, "Not enough rights to set chat description");
   }
 
   td_->create_handler<EditChatAboutQuery>(std::move(promise))->send(DialogId(channel_id), new_description);
@@ -3536,31 +3640,31 @@ void ChatManager::set_channel_description(ChannelId channel_id, const string &de
 void ChatManager::set_channel_discussion_group(DialogId dialog_id, DialogId discussion_dialog_id,
                                                Promise<Unit> &&promise) {
   if (!dialog_id.is_valid() && !discussion_dialog_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid chat identifiers specified"));
+    return promise.set_error(400, "Invalid chat identifiers specified");
   }
 
   ChannelId broadcast_channel_id;
   telegram_api::object_ptr<telegram_api::InputChannel> broadcast_input_channel;
   if (dialog_id.is_valid()) {
     if (!td_->dialog_manager_->have_dialog_force(dialog_id, "set_channel_discussion_group 1")) {
-      return promise.set_error(Status::Error(400, "Chat not found"));
+      return promise.set_error(400, "Chat not found");
     }
 
     if (dialog_id.get_type() != DialogType::Channel) {
-      return promise.set_error(Status::Error(400, "Chat is not a channel"));
+      return promise.set_error(400, "Chat is not a channel");
     }
 
     broadcast_channel_id = dialog_id.get_channel_id();
     const Channel *c = get_channel(broadcast_channel_id);
     if (c == nullptr) {
-      return promise.set_error(Status::Error(400, "Chat info not found"));
+      return promise.set_error(400, "Chat info not found");
     }
 
     if (c->is_megagroup) {
-      return promise.set_error(Status::Error(400, "Chat is not a channel"));
+      return promise.set_error(400, "Chat is not a channel");
     }
     if (!c->status.can_change_info_and_settings_as_administrator()) {
-      return promise.set_error(Status::Error(400, "Not enough rights in the channel"));
+      return promise.set_error(400, "Not enough rights in the channel");
     }
 
     broadcast_input_channel = get_input_channel(broadcast_channel_id);
@@ -3573,23 +3677,23 @@ void ChatManager::set_channel_discussion_group(DialogId dialog_id, DialogId disc
   telegram_api::object_ptr<telegram_api::InputChannel> group_input_channel;
   if (discussion_dialog_id.is_valid()) {
     if (!td_->dialog_manager_->have_dialog_force(discussion_dialog_id, "set_channel_discussion_group 2")) {
-      return promise.set_error(Status::Error(400, "Discussion chat not found"));
+      return promise.set_error(400, "Discussion chat not found");
     }
     if (discussion_dialog_id.get_type() != DialogType::Channel) {
-      return promise.set_error(Status::Error(400, "Discussion chat is not a supergroup"));
+      return promise.set_error(400, "Discussion chat is not a supergroup");
     }
 
     group_channel_id = discussion_dialog_id.get_channel_id();
     const Channel *c = get_channel(group_channel_id);
     if (c == nullptr) {
-      return promise.set_error(Status::Error(400, "Discussion chat info not found"));
+      return promise.set_error(400, "Discussion chat info not found");
     }
 
     if (!c->is_megagroup) {
-      return promise.set_error(Status::Error(400, "Discussion chat is not a supergroup"));
+      return promise.set_error(400, "Discussion chat is not a supergroup");
     }
     if (!c->status.is_administrator() || !c->status.can_pin_messages()) {
-      return promise.set_error(Status::Error(400, "Not enough rights in the supergroup"));
+      return promise.set_error(400, "Not enough rights in the supergroup");
     }
 
     group_input_channel = get_input_channel(group_channel_id);
@@ -3606,31 +3710,31 @@ void ChatManager::set_channel_discussion_group(DialogId dialog_id, DialogId disc
 void ChatManager::set_channel_monoforum_group(DialogId dialog_id, bool is_enabled, int64 paid_message_star_count,
                                               Promise<Unit> &&promise) {
   if (!dialog_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid chat identifier specified"));
+    return promise.set_error(400, "Invalid chat identifier specified");
   }
   if (!td_->dialog_manager_->have_dialog_force(dialog_id, "set_channel_monoforum_group")) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
 
   if (dialog_id.get_type() != DialogType::Channel) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
 
   auto channel_id = dialog_id.get_channel_id();
   const Channel *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Chat is not a channel"));
+    return promise.set_error(400, "Chat is not a channel");
   }
   if (!c->status.is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the channel"));
+    return promise.set_error(400, "Not enough rights in the channel");
   }
   if (!is_enabled) {
     paid_message_star_count = 0;
   } else if (paid_message_star_count < 0 || paid_message_star_count > 1000000) {
-    return promise.set_error(Status::Error(400, "Invalid number of Telegram Stars specified"));
+    return promise.set_error(400, "Invalid number of Telegram Stars specified");
   }
 
   td_->create_handler<UpdatePaidMessagesPriceQuery>(std::move(promise))
@@ -3639,50 +3743,50 @@ void ChatManager::set_channel_monoforum_group(DialogId dialog_id, bool is_enable
 
 void ChatManager::set_channel_location(ChannelId channel_id, const DialogLocation &location, Promise<Unit> &&promise) {
   if (location.empty()) {
-    return promise.set_error(Status::Error(400, "Invalid chat location specified"));
+    return promise.set_error(400, "Invalid chat location specified");
   }
 
   const Channel *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
   if (!c->status.is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the supergroup"));
+    return promise.set_error(400, "Not enough rights in the supergroup");
   }
 
   td_->create_handler<EditLocationQuery>(std::move(promise))->send(channel_id, location);
 }
 
 void ChatManager::set_channel_slow_mode_delay(DialogId dialog_id, int32 slow_mode_delay, Promise<Unit> &&promise) {
-  vector<int32> allowed_slow_mode_delays{0, 10, 30, 60, 300, 900, 3600};
+  vector<int32> allowed_slow_mode_delays{0, 5, 10, 30, 60, 300, 900, 3600};
   if (!td::contains(allowed_slow_mode_delays, slow_mode_delay)) {
-    return promise.set_error(Status::Error(400, "Invalid new value for slow mode delay"));
+    return promise.set_error(400, "Invalid new value for slow mode delay");
   }
 
   if (!dialog_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid chat identifier specified"));
+    return promise.set_error(400, "Invalid chat identifier specified");
   }
   if (!td_->dialog_manager_->have_dialog_force(dialog_id, "set_channel_slow_mode_delay")) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
 
   if (dialog_id.get_type() != DialogType::Channel) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
 
   auto channel_id = dialog_id.get_channel_id();
   const Channel *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
   if (!get_channel_status(c).can_restrict_members()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the supergroup"));
+    return promise.set_error(400, "Not enough rights in the supergroup");
   }
 
   td_->create_handler<ToggleSlowModeQuery>(std::move(promise))->send(channel_id, slow_mode_delay);
@@ -3690,20 +3794,20 @@ void ChatManager::set_channel_slow_mode_delay(DialogId dialog_id, int32 slow_mod
 
 void ChatManager::get_channel_statistics_dc_id(DialogId dialog_id, bool for_full_statistics, Promise<DcId> &&promise) {
   if (!dialog_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid chat identifier specified"));
+    return promise.set_error(400, "Invalid chat identifier specified");
   }
   if (!td_->dialog_manager_->have_dialog_force(dialog_id, "get_channel_statistics_dc_id")) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
 
   if (dialog_id.get_type() != DialogType::Channel) {
-    return promise.set_error(Status::Error(400, "Chat is not a channel"));
+    return promise.set_error(400, "Chat is not a channel");
   }
 
   auto channel_id = dialog_id.get_channel_id();
   const Channel *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
 
   auto channel_full = get_channel_full_force(channel_id, false, "get_channel_statistics_dc_id");
@@ -3727,11 +3831,11 @@ void ChatManager::get_channel_statistics_dc_id_impl(ChannelId channel_id, bool f
 
   auto channel_full = get_channel_full(channel_id, false, "get_channel_statistics_dc_id_impl");
   if (channel_full == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat full info not found"));
+    return promise.set_error(400, "Chat full info not found");
   }
 
   if (!channel_full->stats_dc_id.is_exact() || (for_full_statistics && !channel_full->can_view_statistics)) {
-    return promise.set_error(Status::Error(400, "Chat statistics are not available"));
+    return promise.set_error(400, "Chat statistics are not available");
   }
 
   promise.set_value(DcId(channel_full->stats_dc_id));
@@ -3780,13 +3884,13 @@ void ChatManager::report_channel_spam(ChannelId channel_id, const vector<Message
                                       Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Spam can be reported only in supergroups"));
+    return promise.set_error(400, "Spam can be reported only in supergroups");
   }
   if (!c->status.is_administrator()) {
-    return promise.set_error(Status::Error(400, "Spam can be reported only by chat administrators"));
+    return promise.set_error(400, "Spam can be reported only by chat administrators");
   }
 
   FlatHashMap<DialogId, vector<MessageId>, DialogIdHash> server_message_ids;
@@ -3818,18 +3922,17 @@ void ChatManager::report_channel_anti_spam_false_positive(ChannelId channel_id, 
                                                           Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "The chat is not a supergroup"));
+    return promise.set_error(400, "The chat is not a supergroup");
   }
   if (!c->status.is_administrator()) {
-    return promise.set_error(
-        Status::Error(400, "Anti-spam checks false positives can be reported only by chat administrators"));
+    return promise.set_error(400, "Anti-spam checks false positives can be reported only by chat administrators");
   }
 
-  if (!message_id.is_valid() || !message_id.is_server()) {
-    return promise.set_error(Status::Error(400, "Invalid message identifier specified"));
+  if (!message_id.is_server()) {
+    return promise.set_error(400, "Invalid message identifier specified");
   }
 
   td_->create_handler<ReportChannelAntiSpamFalsePositiveQuery>(std::move(promise))->send(channel_id, message_id);
@@ -3838,29 +3941,29 @@ void ChatManager::report_channel_anti_spam_false_positive(ChannelId channel_id, 
 void ChatManager::set_channel_send_paid_message_star_count(DialogId dialog_id, int64 send_paid_message_star_count,
                                                            Promise<Unit> &&promise) {
   if (!dialog_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid chat identifier specified"));
+    return promise.set_error(400, "Invalid chat identifier specified");
   }
   if (!td_->dialog_manager_->have_dialog_force(dialog_id, "set_channel_send_paid_message_star_count")) {
-    return promise.set_error(Status::Error(400, "Chat not found"));
+    return promise.set_error(400, "Chat not found");
   }
 
   if (dialog_id.get_type() != DialogType::Channel) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
 
   auto channel_id = dialog_id.get_channel_id();
   const Channel *c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!c->is_megagroup) {
-    return promise.set_error(Status::Error(400, "Chat is not a supergroup"));
+    return promise.set_error(400, "Chat is not a supergroup");
   }
   if (!get_channel_status(c).can_restrict_members()) {
-    return promise.set_error(Status::Error(400, "Not enough rights in the supergroup"));
+    return promise.set_error(400, "Not enough rights in the supergroup");
   }
   if (send_paid_message_star_count < 0 || send_paid_message_star_count > 1000000) {
-    return promise.set_error(Status::Error(400, "Invalid number of Telegram Stars specified"));
+    return promise.set_error(400, "Invalid number of Telegram Stars specified");
   }
 
   td_->create_handler<UpdatePaidMessagesPriceQuery>(std::move(promise))
@@ -3870,13 +3973,13 @@ void ChatManager::set_channel_send_paid_message_star_count(DialogId dialog_id, i
 void ChatManager::delete_chat(ChatId chat_id, Promise<Unit> &&promise) {
   auto c = get_chat(chat_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!get_chat_status(c).is_creator()) {
-    return promise.set_error(Status::Error(400, "Not enough rights to delete the chat"));
+    return promise.set_error(400, "Not enough rights to delete the chat");
   }
   if (!c->is_active) {
-    return promise.set_error(Status::Error(400, "Chat is already deactivated"));
+    return promise.set_error(400, "Chat is already deactivated");
   }
 
   td_->create_handler<DeleteChatQuery>(std::move(promise))->send(chat_id);
@@ -3885,10 +3988,10 @@ void ChatManager::delete_chat(ChatId chat_id, Promise<Unit> &&promise) {
 void ChatManager::delete_channel(ChannelId channel_id, Promise<Unit> &&promise) {
   auto c = get_channel(channel_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Chat info not found"));
+    return promise.set_error(400, "Chat info not found");
   }
   if (!get_channel_can_be_deleted(c)) {
-    return promise.set_error(Status::Error(400, "The chat can't be deleted"));
+    return promise.set_error(400, "The chat can't be deleted");
   }
 
   td_->create_handler<DeleteChannelQuery>(std::move(promise))->send(channel_id);
@@ -4104,6 +4207,22 @@ void ChatManager::save_created_public_channels(PublicDialogType type) {
 
 void ChatManager::check_created_public_dialogs_limit(PublicDialogType type, Promise<Unit> &&promise) {
   td_->create_handler<GetCreatedPublicChannelsQuery>(std::move(promise))->send(type, true);
+}
+
+void ChatManager::load_created_public_broadcasts(Promise<Unit> &&promise) {
+  if (td_->auth_manager_->is_bot() || are_created_public_broadcasts_inited()) {
+    return promise.set_value(Unit());
+  }
+
+  auto new_promise = PromiseCreator::lambda(
+      [promise = std::move(promise)](Result<td_api::object_ptr<td_api::chats>> &&result) mutable {
+        if (result.is_error()) {
+          promise.set_error(result.move_as_error());
+        } else {
+          promise.set_value(Unit());
+        }
+      });
+  get_created_public_dialogs(PublicDialogType::ForPersonalDialog, std::move(new_promise), true);
 }
 
 bool ChatManager::are_created_public_broadcasts_inited() const {
@@ -4776,7 +4895,9 @@ void ChatManager::on_load_channel_from_database(ChannelId channel_id, string val
         }
       } else {
         for (auto &promise : promises) {
-          load_channel_from_database_impl(c->monoforum_channel_id, true, std::move(promise));
+          load_channel_from_database_impl(
+              c->monoforum_channel_id, true,
+              PromiseCreator::lambda([promise = std::move(promise)](Unit) mutable { promise.set_value(Unit()); }));
         }
       }
       return;
@@ -5298,7 +5419,7 @@ void ChatManager::update_channel(Channel *c, ChannelId channel_id, bool from_bin
   }
   if (c->is_stories_hidden_changed) {
     send_closure_later(td_->story_manager_actor_, &StoryManager::on_dialog_active_stories_order_updated,
-                       DialogId(channel_id), "update_channel stories_hidden");
+                       DialogId(channel_id), "update_channel stories_hidden", false);
     c->is_stories_hidden_changed = false;
   }
   auto unix_time = G()->unix_time();
@@ -5524,6 +5645,7 @@ void ChatManager::update_channel_full(ChannelFull *channel_full, ChannelId chann
 
 void ChatManager::on_get_chat(tl_object_ptr<telegram_api::Chat> &&chat, const char *source) {
   LOG(DEBUG) << "Receive from " << source << ' ' << to_string(chat);
+  CHECK(chat != nullptr);
   switch (chat->get_id()) {
     case telegram_api::chatEmpty::ID:
       on_get_chat_empty(static_cast<telegram_api::chatEmpty &>(*chat), source);
@@ -5607,7 +5729,8 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
                          default_join_group_call_as_dialog_id, false);
     }
 
-    td_->messages_manager_->on_update_dialog_message_ttl(DialogId(chat_id), MessageTtl(chat->ttl_period_));
+    td_->messages_manager_->on_update_dialog_message_ttl(DialogId(chat_id),
+                                                         MessageTtl(chat->ttl_period_, "on_get_chat_full"));
 
     td_->messages_manager_->on_update_dialog_is_translatable(DialogId(chat_id), !chat->translations_disabled_);
 
@@ -5635,7 +5758,8 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
     td_->messages_manager_->on_update_dialog_available_reactions(
         DialogId(chat_id), std::move(chat->available_reactions_), chat->reactions_limit_, false);
 
-    td_->messages_manager_->on_update_dialog_theme_name(DialogId(chat_id), std::move(chat->theme_emoticon_));
+    td_->messages_manager_->on_update_dialog_chat_theme(DialogId(chat_id),
+                                                        ChatTheme::emoji(std::move(chat->theme_emoticon_)));
 
     td_->messages_manager_->on_update_dialog_pending_join_requests(DialogId(chat_id), chat->requests_pending_,
                                                                    std::move(chat->recent_requesters_));
@@ -5693,12 +5817,14 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
         DialogId(channel_id), std::move(channel->available_reactions_), channel->reactions_limit_,
         channel->paid_reactions_available_);
 
-    td_->messages_manager_->on_update_dialog_theme_name(DialogId(channel_id), std::move(channel->theme_emoticon_));
+    td_->messages_manager_->on_update_dialog_chat_theme(DialogId(channel_id),
+                                                        ChatTheme::emoji(std::move(channel->theme_emoticon_)));
 
     td_->messages_manager_->on_update_dialog_pending_join_requests(DialogId(channel_id), channel->requests_pending_,
                                                                    std::move(channel->recent_requesters_));
 
-    td_->messages_manager_->on_update_dialog_message_ttl(DialogId(channel_id), MessageTtl(channel->ttl_period_));
+    td_->messages_manager_->on_update_dialog_message_ttl(DialogId(channel_id),
+                                                         MessageTtl(channel->ttl_period_, "on_get_channel_full"));
 
     td_->messages_manager_->on_update_dialog_view_as_messages(DialogId(channel_id), channel->view_forum_as_messages_);
 
@@ -5742,6 +5868,7 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
     auto gift_count = channel->stargifts_count_;
     auto has_stargifts_available = channel->stargifts_available_;
     auto has_paid_messages_available = channel->paid_messages_available_;
+    auto send_paid_message_stars = StarManager::get_star_count(channel->send_paid_messages_stars_);
     StickerSetId sticker_set_id;
     if (channel->stickerset_ != nullptr) {
       sticker_set_id =
@@ -5760,6 +5887,7 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
       LOG(ERROR) << "Receive can_view_statistics == true, but invalid statistics DC ID in " << channel_id;
       can_view_statistics = false;
     }
+    auto main_profile_tab = get_profile_tab(std::move(channel->main_tab_), get_channel_type(c));
 
     channel_full->repair_request_version = 0;
     channel_full->expires_at = Time::now() + CHANNEL_FULL_EXPIRE_TIME;
@@ -5782,7 +5910,9 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
         channel_full->can_view_star_revenue != can_view_star_revenue ||
         channel_full->bot_verification != bot_verification ||
         channel_full->has_stargifts_available != has_stargifts_available ||
-        channel_full->has_paid_messages_available != has_paid_messages_available) {
+        channel_full->has_paid_messages_available != has_paid_messages_available ||
+        channel_full->send_paid_message_stars != send_paid_message_stars ||
+        channel_full->main_profile_tab != main_profile_tab) {
       channel_full->participant_count = participant_count;
       channel_full->administrator_count = administrator_count;
       channel_full->restricted_count = restricted_count;
@@ -5808,6 +5938,8 @@ void ChatManager::on_get_chat_full(tl_object_ptr<telegram_api::ChatFull> &&chat_
       channel_full->bot_verification = std::move(bot_verification);
       channel_full->has_stargifts_available = has_stargifts_available;
       channel_full->has_paid_messages_available = has_paid_messages_available;
+      channel_full->send_paid_message_stars = StarManager::get_star_count(send_paid_message_stars);
+      channel_full->main_profile_tab = main_profile_tab;
 
       channel_full->is_changed = true;
     }
@@ -6084,7 +6216,7 @@ void ChatManager::on_get_chat_participants(tl_object_ptr<telegram_api::ChatParti
 
         LOG_IF(ERROR, !td_->dialog_manager_->have_dialog_info(dialog_participant.dialog_id_))
             << "Have no information about " << dialog_participant.dialog_id_ << " as a member of " << chat_id;
-        LOG_IF(ERROR, !td_->user_manager_->have_user(dialog_participant.inviter_user_id_))
+        LOG_IF(ERROR, !td_->user_manager_->have_min_user(dialog_participant.inviter_user_id_))
             << "Have no information about " << dialog_participant.inviter_user_id_ << " as a member of " << chat_id;
         if (dialog_participant.joined_date_ < c->date) {
           LOG_IF(ERROR, dialog_participant.joined_date_ < c->date - 30 && c->date >= 1486000000)
@@ -6172,13 +6304,21 @@ bool ChatManager::on_get_channel_error(ChannelId channel_id, const Status &statu
     }
 
     auto c = get_channel(channel_id);
+
+    auto initial_channel_id = channel_id;
+    auto initial_c = c;
+    if (c != nullptr && c->is_monoforum) {
+      channel_id = c->monoforum_channel_id;
+      c = get_channel(channel_id);
+    }
     if (c == nullptr) {
       if (Slice(source) == Slice("GetChannelDifferenceQuery") || Slice(source) == Slice("GetChannelsQuery")) {
         // get channel difference after restart
         // get channel from server by its identifier
         return true;
       }
-      LOG(ERROR) << "Receive " << status.message() << " in not found " << channel_id << " from " << source;
+      LOG(ERROR) << "Receive " << status.message() << " in not found " << initial_channel_id << '/' << channel_id
+                 << " from " << source;
       return false;
     }
 
@@ -6204,8 +6344,11 @@ bool ChatManager::on_get_channel_error(ChannelId channel_id, const Status &statu
       td_->dialog_invite_link_manager_->remove_dialog_access_by_invite_link(DialogId(channel_id));
     }
     invalidate_channel_full(channel_id, !c->is_slow_mode_enabled, source);
-    LOG_IF(ERROR, have_input_peer_channel(c, channel_id, AccessRights::Read))
-        << "Have read access to channel after receiving CHANNEL_PRIVATE. Channel state: "
+    if (channel_id != initial_channel_id) {
+      invalidate_channel_full(initial_channel_id, !initial_c->is_slow_mode_enabled, source);
+    }
+    LOG_IF(ERROR, have_input_peer_channel(initial_c, initial_channel_id, AccessRights::Read))
+        << "Have read access to " << initial_channel_id << " after receiving CHANNEL_PRIVATE. Channel state: "
         << oneline(to_string(get_supergroup_object(channel_id, c)))
         << ". Previous channel state: " << debug_channel_object;
 
@@ -6727,11 +6870,11 @@ void ChatManager::on_update_chat_add_user(ChatId chat_id, UserId inviter_user_id
     LOG(ERROR) << "Receive invalid " << chat_id;
     return;
   }
-  if (!td_->user_manager_->have_user(user_id)) {
+  if (!td_->user_manager_->have_min_user(user_id)) {
     LOG(ERROR) << "Can't find " << user_id;
     return;
   }
-  if (!td_->user_manager_->have_user(inviter_user_id)) {
+  if (!td_->user_manager_->have_min_user(inviter_user_id)) {
     LOG(ERROR) << "Can't find " << inviter_user_id;
     return;
   }
@@ -6797,7 +6940,7 @@ void ChatManager::on_update_chat_edit_administrator(ChatId chat_id, UserId user_
     LOG(ERROR) << "Receive invalid " << chat_id;
     return;
   }
-  if (!td_->user_manager_->have_user(user_id)) {
+  if (!td_->user_manager_->have_min_user(user_id)) {
     LOG(ERROR) << "Can't find " << user_id;
     return;
   }
@@ -6866,7 +7009,7 @@ void ChatManager::on_update_chat_delete_user(ChatId chat_id, UserId user_id, int
     LOG(ERROR) << "Receive invalid " << chat_id;
     return;
   }
-  if (!td_->user_manager_->have_user(user_id)) {
+  if (!td_->user_manager_->have_min_user(user_id)) {
     LOG(ERROR) << "Can't find " << user_id;
     return;
   }
@@ -7368,10 +7511,10 @@ void ChatManager::on_update_channel_title(Channel *c, ChannelId channel_id, stri
 void ChatManager::on_update_channel_status(Channel *c, ChannelId channel_id, DialogParticipantStatus &&status) {
   if (c->is_monoforum) {
     if (status.is_member()) {
-      status = c->is_admined_monoforum
+      status = c->is_admined_monoforum && !td_->auth_manager_->is_bot()
                    ? DialogParticipantStatus::Administrator(
                          AdministratorRights(true, true, false, false, false, false, false, false, false, false, false,
-                                             false, false, false, false, ChannelType::Megagroup),
+                                             false, false, false, false, false, ChannelType::Megagroup),
                          string(), false)
                    : DialogParticipantStatus::Member(0);
     } else {
@@ -7446,7 +7589,7 @@ void ChatManager::on_channel_status_changed(Channel *c, ChannelId channel_id, co
       send_closure_later(td_->story_manager_actor_, &StoryManager::reload_dialog_expiring_stories, dialog_id);
     } else {
       send_closure_later(td_->story_manager_actor_, &StoryManager::on_dialog_active_stories_order_updated, dialog_id,
-                         "on_channel_status_changed");
+                         "on_channel_status_changed", false);
     }
 
     send_closure_later(G()->messages_manager(), &MessagesManager::force_create_dialog, dialog_id,
@@ -7496,7 +7639,8 @@ void ChatManager::on_update_channel_is_forum(Channel *c, ChannelId channel_id, b
   }
 }
 
-void ChatManager::on_update_channel_story_ids(ChannelId channel_id, StoryId max_active_story_id,
+void ChatManager::on_update_channel_story_ids(ChannelId channel_id,
+                                              telegram_api::object_ptr<telegram_api::recentStory> &&recent_story,
                                               StoryId max_read_story_id) {
   if (!channel_id.is_valid()) {
     LOG(ERROR) << "Receive invalid " << channel_id;
@@ -7505,17 +7649,24 @@ void ChatManager::on_update_channel_story_ids(ChannelId channel_id, StoryId max_
 
   Channel *c = get_channel_force(channel_id, "on_update_channel_story_ids");
   if (c != nullptr) {
-    on_update_channel_story_ids_impl(c, channel_id, max_active_story_id, max_read_story_id);
+    on_update_channel_story_ids_impl(c, channel_id, std::move(recent_story), max_read_story_id);
     update_channel(c, channel_id);
   } else {
     LOG(INFO) << "Ignore update channel story identifiers about unknown " << channel_id;
   }
 }
 
-void ChatManager::on_update_channel_story_ids_impl(Channel *c, ChannelId channel_id, StoryId max_active_story_id,
+void ChatManager::on_update_channel_story_ids_impl(Channel *c, ChannelId channel_id,
+                                                   telegram_api::object_ptr<telegram_api::recentStory> &&recent_story,
                                                    StoryId max_read_story_id) {
   if (td_->auth_manager_->is_bot()) {
     return;
+  }
+  StoryId max_active_story_id;
+  bool has_live_story = false;
+  if (recent_story != nullptr) {
+    max_active_story_id = StoryId(recent_story->max_id_);
+    has_live_story = recent_story->live_;
   }
   if (max_active_story_id != StoryId() && !max_active_story_id.is_server()) {
     LOG(ERROR) << "Receive max active " << max_active_story_id << " for " << channel_id;
@@ -7525,8 +7676,17 @@ void ChatManager::on_update_channel_story_ids_impl(Channel *c, ChannelId channel
     LOG(ERROR) << "Receive max read " << max_read_story_id << " for " << channel_id;
     return;
   }
+  if (has_live_story && max_active_story_id == StoryId()) {
+    LOG(ERROR) << "Receive live story without identifier for " << channel_id;
+    return;
+  }
 
-  auto has_unread_stories = get_channel_has_unread_stories(c);
+  auto active_story_state = get_channel_active_story_state(c);
+  if (c->has_live_story != has_live_story) {
+    LOG(DEBUG) << "Change has_live_story of " << channel_id << " to " << has_live_story;
+    c->has_live_story = has_live_story;
+    c->need_save_to_database = true;
+  }
   if (c->max_active_story_id != max_active_story_id) {
     LOG(DEBUG) << "Change last active story of " << channel_id << " from " << c->max_active_story_id << " to "
                << max_active_story_id;
@@ -7555,8 +7715,8 @@ void ChatManager::on_update_channel_story_ids_impl(Channel *c, ChannelId channel
     c->max_read_story_id = max_read_story_id;
     c->need_save_to_database = true;
   }
-  if (has_unread_stories != get_channel_has_unread_stories(c)) {
-    LOG(DEBUG) << "Change has_unread_stories of " << channel_id << " to " << !has_unread_stories;
+  if (active_story_state != get_channel_active_story_state(c)) {
+    LOG(DEBUG) << "Change active_story_state of " << channel_id;
     c->is_changed = true;
   }
 }
@@ -7576,15 +7736,15 @@ void ChatManager::on_update_channel_max_read_story_id(Channel *c, ChannelId chan
     return;
   }
 
-  auto has_unread_stories = get_channel_has_unread_stories(c);
+  auto active_story_state = get_channel_active_story_state(c);
   if (max_read_story_id.get() > c->max_read_story_id.get()) {
     LOG(DEBUG) << "Change last read story of " << channel_id << " from " << c->max_read_story_id << " to "
                << max_read_story_id;
     c->max_read_story_id = max_read_story_id;
     c->need_save_to_database = true;
   }
-  if (has_unread_stories != get_channel_has_unread_stories(c)) {
-    LOG(DEBUG) << "Change has_unread_stories of " << channel_id << " to " << !has_unread_stories;
+  if (active_story_state != get_channel_active_story_state(c)) {
+    LOG(DEBUG) << "Change active_story_state of " << channel_id;
     c->is_changed = true;
   }
 }
@@ -7972,7 +8132,7 @@ void ChatManager::create_new_chat(const vector<UserId> &user_ids, const string &
                                   Promise<td_api::object_ptr<td_api::createdBasicGroupChat>> &&promise) {
   auto new_title = clean_name(title, MAX_TITLE_LENGTH);
   if (new_title.empty()) {
-    return promise.set_error(Status::Error(400, "Title must be non-empty"));
+    return promise.set_error(400, "Title must be non-empty");
   }
 
   vector<telegram_api::object_ptr<telegram_api::InputUser>> input_users;
@@ -7989,7 +8149,7 @@ void ChatManager::create_new_channel(const string &title, bool is_forum, bool is
                                      Promise<td_api::object_ptr<td_api::chat>> &&promise) {
   auto new_title = clean_name(title, MAX_TITLE_LENGTH);
   if (new_title.empty()) {
-    return promise.set_error(Status::Error(400, "Title must be non-empty"));
+    return promise.set_error(400, "Title must be non-empty");
   }
 
   td_->create_handler<CreateChannelQuery>(std::move(promise))
@@ -8020,7 +8180,7 @@ ChatManager::Chat *ChatManager::add_chat(ChatId chat_id) {
 
 bool ChatManager::get_chat(ChatId chat_id, int left_tries, Promise<Unit> &&promise) {
   if (!chat_id.is_valid()) {
-    promise.set_error(Status::Error(400, "Invalid basic group identifier"));
+    promise.set_error(400, "Invalid basic group identifier");
     return false;
   }
 
@@ -8035,7 +8195,7 @@ bool ChatManager::get_chat(ChatId chat_id, int left_tries, Promise<Unit> &&promi
       return false;
     }
 
-    promise.set_error(Status::Error(400, "Group not found"));
+    promise.set_error(400, "Group not found");
     return false;
   }
 
@@ -8047,7 +8207,7 @@ void ChatManager::reload_chat(ChatId chat_id, Promise<Unit> &&promise, const cha
   TRY_STATUS_PROMISE(promise, G()->close_status());
 
   if (!chat_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid basic group identifier"));
+    return promise.set_error(400, "Invalid basic group identifier");
   }
 
   get_chat_queries_.add_query(chat_id.get(), std::move(promise), source);
@@ -8103,7 +8263,7 @@ bool ChatManager::is_chat_full_outdated(const ChatFull *chat_full, const Chat *c
 void ChatManager::load_chat_full(ChatId chat_id, bool force, Promise<Unit> &&promise, const char *source) {
   auto c = get_chat(chat_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Group not found"));
+    return promise.set_error(400, "Group not found");
   }
 
   auto chat_full = get_chat_full_force(chat_id, source);
@@ -8137,7 +8297,7 @@ void ChatManager::reload_chat_full(ChatId chat_id, Promise<Unit> &&promise, cons
 void ChatManager::send_get_chat_full_query(ChatId chat_id, Promise<Unit> &&promise, const char *source) {
   LOG(INFO) << "Get full " << chat_id << " from " << source;
   if (!chat_id.is_valid()) {
-    return promise.set_error(Status::Error(500, "Invalid chat_id"));
+    return promise.set_error(500, "Invalid chat_id");
   }
   auto send_query = PromiseCreator::lambda([td = td_, chat_id](Result<Promise<Unit>> &&promise) {
     if (promise.is_ok() && !G()->close_flag()) {
@@ -8414,7 +8574,7 @@ bool ChatManager::get_channel_can_be_deleted(const Channel *c) {
 }
 
 bool ChatManager::get_channel_join_to_send(const Channel *c) {
-  return c->join_to_send || !c->is_megagroup || !c->has_linked_channel;
+  return (c->join_to_send || !c->is_megagroup || !c->has_linked_channel) && !c->is_monoforum;
 }
 
 bool ChatManager::get_channel_join_request(ChannelId channel_id) const {
@@ -8426,7 +8586,8 @@ bool ChatManager::get_channel_join_request(ChannelId channel_id) const {
 }
 
 bool ChatManager::get_channel_join_request(const Channel *c) {
-  return c->join_request && c->is_megagroup && (is_channel_public(c) || c->has_linked_channel);
+  return c->join_request && c->is_megagroup && !c->is_monoforum && (is_channel_public(c) || c->has_linked_channel) &&
+         !c->is_gigagroup;
 }
 
 ChannelId ChatManager::get_channel_linked_channel_id(ChannelId channel_id, const char *source) {
@@ -8520,24 +8681,40 @@ ChatManager::Channel *ChatManager::add_channel(ChannelId channel_id, const char 
 
 bool ChatManager::get_channel(ChannelId channel_id, int left_tries, Promise<Unit> &&promise) {
   if (!channel_id.is_valid()) {
-    promise.set_error(Status::Error(400, "Invalid supergroup identifier"));
+    promise.set_error(400, "Invalid supergroup identifier");
     return false;
   }
 
-  if (!have_channel(channel_id)) {
-    if (left_tries > 2 && G()->use_chat_info_database()) {
+  const Channel *c = get_channel(channel_id);
+  if (c == nullptr) {
+    if (left_tries > 3 && G()->use_chat_info_database()) {
       send_closure_later(actor_id(this), &ChatManager::load_channel_from_database, nullptr, channel_id,
                          std::move(promise));
       return false;
     }
 
-    if (left_tries > 1 && td_->auth_manager_->is_bot()) {
+    if (left_tries > 2 && td_->auth_manager_->is_bot()) {
       get_channel_queries_.add_query(channel_id.get(), std::move(promise), "get_channel");
       return false;
     }
 
-    promise.set_error(Status::Error(400, "Supergroup not found"));
+    promise.set_error(400, "Supergroup not found");
     return false;
+  }
+  if (c->monoforum_channel_id.is_valid() && !have_channel(c->monoforum_channel_id)) {
+    if (left_tries > 2 && G()->use_chat_info_database()) {
+      send_closure_later(
+          actor_id(this), &ChatManager::load_channel_from_database, nullptr, c->monoforum_channel_id,
+          PromiseCreator::lambda([promise = std::move(promise)](Unit) mutable { promise.set_value(Unit()); }));
+      return false;
+    }
+    if (left_tries > 1 && td_->auth_manager_->is_bot() && (c->is_monoforum || c->status.can_manage_direct_messages())) {
+      get_channel_queries_.add_query(
+          c->monoforum_channel_id.get(),
+          PromiseCreator::lambda([promise = std::move(promise)](Unit) mutable { promise.set_value(Unit()); }),
+          "get channel monoforum");
+      return false;
+    }
   }
 
   promise.set_value(Unit());
@@ -8548,7 +8725,7 @@ void ChatManager::reload_channel(ChannelId channel_id, Promise<Unit> &&promise, 
   TRY_STATUS_PROMISE(promise, G()->close_status());
 
   if (!channel_id.is_valid()) {
-    return promise.set_error(Status::Error(400, "Invalid supergroup identifier"));
+    return promise.set_error(400, "Invalid supergroup identifier");
   }
 
   have_channel_force(channel_id, source);
@@ -8628,11 +8805,11 @@ void ChatManager::send_get_channel_full_query(ChannelFull *channel_full, Channel
                                               const char *source) {
   auto input_channel = get_input_channel(channel_id);
   if (input_channel == nullptr) {
-    return promise.set_error(Status::Error(400, "Supergroup not found"));
+    return promise.set_error(400, "Supergroup not found");
   }
 
   if (!have_input_peer_channel(channel_id, AccessRights::Read)) {
-    return promise.set_error(Status::Error(400, "Can't access the chat"));
+    return promise.set_error(400, "Can't access the chat");
   }
 
   if (channel_full != nullptr) {
@@ -8662,7 +8839,7 @@ void ChatManager::get_chat_participant(ChatId chat_id, UserId user_id, Promise<D
 
   auto c = get_chat(chat_id);
   if (c == nullptr) {
-    return promise.set_error(Status::Error(400, "Group not found"));
+    return promise.set_error(400, "Group not found");
   }
 
   if (td_->auth_manager_->is_bot() && user_id == td_->user_manager_->get_my_id()) {
@@ -8907,7 +9084,7 @@ void ChatManager::on_get_channel(telegram_api::channel &channel, const char *sou
   bool is_monoforum = channel.monoforum_;
   bool have_participant_count = (channel.flags_ & telegram_api::channel::PARTICIPANTS_COUNT_MASK) != 0;
   int32 participant_count = channel.participants_count_;
-  bool stories_available = channel.stories_max_id_ > 0;
+  bool stories_available = channel.stories_max_id_ != nullptr && channel.stories_max_id_->max_id_ > 0;
   bool stories_unavailable = channel.stories_unavailable_;
   bool show_message_sender = channel.signature_profiles_;
   auto boost_level = channel.level_;
@@ -9074,12 +9251,17 @@ void ChatManager::on_get_channel(telegram_api::channel &channel, const char *sou
 
   bool is_admined_monoforum = false;
   if (monoforum_channel_id.is_valid()) {
-    Channel *monoforum_c = get_channel(monoforum_channel_id);
-    if (monoforum_c != nullptr) {
-      if (is_monoforum) {
-        is_admined_monoforum = monoforum_c->status.can_post_messages();
-      } else if (status.can_post_messages() && !monoforum_c->is_admined_monoforum) {
-        monoforum_c->is_admined_monoforum = true;
+    if (is_monoforum) {
+      Channel *monoforum_c = get_channel_force(monoforum_channel_id, source);
+      if (monoforum_c != nullptr) {
+        is_admined_monoforum = monoforum_c->status.can_manage_direct_messages();
+      } else if (status.is_member() && td_->auth_manager_->is_bot()) {
+        is_admined_monoforum = true;
+      }
+    } else {
+      Channel *monoforum_c = get_channel(monoforum_channel_id);
+      if (monoforum_c != nullptr && status.can_manage_direct_messages() != monoforum_c->is_admined_monoforum) {
+        monoforum_c->is_admined_monoforum = status.can_manage_direct_messages();
         monoforum_c->is_admined_monoforum_changed = true;
         monoforum_c->is_changed = true;
         update_channel(monoforum_c, monoforum_channel_id);
@@ -9184,7 +9366,7 @@ void ChatManager::on_get_channel(telegram_api::channel &channel, const char *sou
                                         RestrictedRights(channel.default_banned_rights_, ChannelType::Megagroup));
   if (!td_->auth_manager_->is_bot() && (stories_available || stories_unavailable)) {
     // update at the end, because it calls need_poll_channel_active_stories
-    on_update_channel_story_ids_impl(c, channel_id, StoryId(channel.stories_max_id_), StoryId());
+    on_update_channel_story_ids_impl(c, channel_id, std::move(channel.stories_max_id_), StoryId());
   }
 
   if (c->cache_version != Channel::CACHE_VERSION) {
@@ -9424,7 +9606,7 @@ td_api::object_ptr<td_api::updateSupergroup> ChatManager::get_update_unknown_sup
   return td_api::make_object<td_api::updateSupergroup>(td_api::make_object<td_api::supergroup>(
       channel_id.get(), nullptr, 0, DialogParticipantStatus::Banned(0).get_chat_member_status_object(), 0, 0, false,
       false, false, false, false, !is_megagroup, false, false, !is_megagroup, false, false, false, false, nullptr,
-      false, false, false, string(), 0, false, false));
+      false, false, nullptr, 0, nullptr));
 }
 
 int64 ChatManager::get_supergroup_id_object(ChannelId channel_id, const char *source) const {
@@ -9445,9 +9627,9 @@ bool ChatManager::need_poll_channel_active_stories(const Channel *c, ChannelId c
          have_input_peer_channel(c, channel_id, AccessRights::Read);
 }
 
-bool ChatManager::get_channel_has_unread_stories(const Channel *c) {
+ActiveStoryState ChatManager::get_channel_active_story_state(const Channel *c) {
   CHECK(c != nullptr);
-  return c->max_active_story_id.get() > c->max_read_story_id.get();
+  return ActiveStoryState(c->max_active_story_id, c->max_read_story_id, c->has_live_story);
 }
 
 td_api::object_ptr<td_api::supergroup> ChatManager::get_supergroup_object(ChannelId channel_id) const {
@@ -9465,10 +9647,8 @@ td_api::object_ptr<td_api::supergroup> ChatManager::get_supergroup_object(Channe
       c->has_linked_channel, c->has_location, c->sign_messages, c->show_message_sender, get_channel_join_to_send(c),
       get_channel_join_request(c), c->is_slow_mode_enabled, !c->is_megagroup, c->is_gigagroup, c->is_forum,
       c->is_monoforum, c->is_admined_monoforum, get_channel_verification_status_object(c),
-      c->broadcast_messages_allowed, c->is_forum_tabs,
-      get_restriction_reason_has_sensitive_content(c->restriction_reasons),
-      get_restriction_reason_description(c->restriction_reasons), c->paid_message_star_count,
-      c->max_active_story_id.is_valid(), get_channel_has_unread_stories(c));
+      c->broadcast_messages_allowed, c->is_forum_tabs, get_restriction_info_object(c->restriction_reasons),
+      c->paid_message_star_count, get_channel_active_story_state(c).get_active_story_state_object());
 }
 
 tl_object_ptr<td_api::supergroupFullInfo> ChatManager::get_supergroup_full_info_object(ChannelId channel_id) const {
@@ -9503,10 +9683,11 @@ tl_object_ptr<td_api::supergroupFullInfo> ChatManager::get_supergroup_full_info_
       can_toggle_channel_aggressive_anti_spam(channel_id, channel_full).is_ok(), channel_full->is_all_history_available,
       channel_full->can_have_sponsored_messages, channel_full->has_aggressive_anti_spam_enabled,
       channel_full->has_paid_media_allowed, channel_full->has_pinned_stories, channel_full->gift_count,
-      channel_full->boost_count, channel_full->unrestrict_boost_count, channel_full->sticker_set_id.get(),
-      channel_full->emoji_sticker_set_id.get(), channel_full->location.get_chat_location_object(),
+      channel_full->boost_count, channel_full->unrestrict_boost_count, channel_full->send_paid_message_stars,
+      channel_full->sticker_set_id.get(), channel_full->emoji_sticker_set_id.get(),
+      channel_full->location.get_chat_location_object(),
       channel_full->invite_link.get_chat_invite_link_object(td_->user_manager_.get()), std::move(bot_commands),
-      std::move(bot_verification),
+      std::move(bot_verification), get_profile_tab_object(channel_full->main_profile_tab),
       get_basic_group_id_object(channel_full->migrated_from_chat_id, "get_supergroup_full_info_object"),
       channel_full->migrated_from_max_message_id.get());
 }

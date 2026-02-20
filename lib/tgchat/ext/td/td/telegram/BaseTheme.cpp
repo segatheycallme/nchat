@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -39,6 +39,24 @@ BaseTheme get_base_theme(const telegram_api::object_ptr<telegram_api::BaseTheme>
     default:
       UNREACHABLE();
       return BaseTheme::Classic;
+  }
+}
+
+td_api::object_ptr<td_api::BuiltInTheme> get_built_in_theme_object(BaseTheme base_theme) {
+  switch (base_theme) {
+    case BaseTheme::Classic:
+      return td_api::make_object<td_api::builtInThemeClassic>();
+    case BaseTheme::Day:
+      return td_api::make_object<td_api::builtInThemeDay>();
+    case BaseTheme::Night:
+      return td_api::make_object<td_api::builtInThemeNight>();
+    case BaseTheme::Tinted:
+      return td_api::make_object<td_api::builtInThemeTinted>();
+    case BaseTheme::Arctic:
+      return td_api::make_object<td_api::builtInThemeArctic>();
+    default:
+      UNREACHABLE();
+      return nullptr;
   }
 }
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -120,6 +120,12 @@ static td_api::object_ptr<td_api::PremiumFeature> get_premium_feature_object(Sli
   }
   if (premium_feature == "effects") {
     return td_api::make_object<td_api::premiumFeatureMessageEffects>();
+  }
+  if (premium_feature == "todo") {
+    return td_api::make_object<td_api::premiumFeatureChecklists>();
+  }
+  if (premium_feature == "paid_messages") {
+    return td_api::make_object<td_api::premiumFeaturePaidMessages>();
   }
   if (G()->is_test_dc()) {
     LOG(ERROR) << "Receive unsupported premium feature " << premium_feature;
@@ -266,10 +272,20 @@ static Result<tl_object_ptr<telegram_api::InputStorePaymentPurpose>> get_input_s
     }
     case td_api::storePaymentPurposeStars::ID: {
       auto p = static_cast<td_api::storePaymentPurposeStars *>(purpose.get());
+      int32 flags = 0;
+      telegram_api::object_ptr<telegram_api::InputPeer> spend_purpose_input_peer;
+      DialogId spend_dialog_id(p->chat_id_);
+      if (spend_dialog_id != DialogId()) {
+        TRY_STATUS(td->dialog_manager_->check_dialog_access(spend_dialog_id, false, AccessRights::Read,
+                                                            "storePaymentPurposeStars"));
+        spend_purpose_input_peer = td->dialog_manager_->get_input_peer(spend_dialog_id, AccessRights::Read);
+        CHECK(spend_purpose_input_peer != nullptr);
+        flags |= telegram_api::inputStorePaymentStarsTopup::SPEND_PURPOSE_PEER_MASK;
+      }
       TRY_STATUS(check_payment_amount(p->currency_, p->amount_));
       dismiss_suggested_action(SuggestedAction{SuggestedAction::Type::StarsSubscriptionLowBalance}, Promise<Unit>());
-      return telegram_api::make_object<telegram_api::inputStorePaymentStarsTopup>(p->star_count_, p->currency_,
-                                                                                  p->amount_);
+      return telegram_api::make_object<telegram_api::inputStorePaymentStarsTopup>(
+          flags, p->star_count_, p->currency_, p->amount_, std::move(spend_purpose_input_peer));
     }
     case td_api::storePaymentPurposeGiftedStars::ID: {
       auto p = static_cast<td_api::storePaymentPurposeGiftedStars *>(purpose.get());
@@ -349,7 +365,7 @@ class GetPremiumPromoQuery final : public Td::ResultHandler {
           auto animation_object = td_->animations_manager_->get_animation_object(parsed_document.file_id);
           business_animations.push_back(td_api::make_object<td_api::businessFeaturePromotionAnimation>(
               std::move(business_feature), std::move(animation_object)));
-        } else if (G()->is_test_dc()) {
+        } else if (promo->video_sections_[i] != "gifts") {
           LOG(ERROR) << "Receive unsupported feature " << promo->video_sections_[i];
         }
       }
@@ -357,7 +373,7 @@ class GetPremiumPromoQuery final : public Td::ResultHandler {
 
     auto period_options = get_premium_gift_options(std::move(promo->period_options_));
     promise_.set_value(
-        td_api::make_object<td_api::premiumState>(get_formatted_text_object(td_->user_manager_.get(), state, true, 0),
+        td_api::make_object<td_api::premiumState>(get_formatted_text_object(td_->user_manager_.get(), state, true, -1),
                                                   get_premium_state_payment_options_object(period_options),
                                                   std::move(animations), std::move(business_animations)));
   }
@@ -507,7 +523,7 @@ class CheckGiftCodeQuery final : public Td::ResultHandler {
     td_->user_manager_->on_get_users(std::move(result->users_), "CheckGiftCodeQuery");
     td_->chat_manager_->on_get_chats(std::move(result->chats_), "CheckGiftCodeQuery");
 
-    if (result->date_ <= 0 || result->months_ <= 0 || result->used_date_ < 0) {
+    if (result->date_ <= 0 || result->days_ <= 0 || result->used_date_ < 0) {
       LOG(ERROR) << "Receive " << to_string(result);
       return on_error(Status::Error(500, "Receive invalid response"));
     }
@@ -538,10 +554,12 @@ class CheckGiftCodeQuery final : public Td::ResultHandler {
       LOG(ERROR) << "Receive " << to_string(result);
       message_id = MessageId();
     }
+    auto month_count = get_premium_duration_month_count(result->days_);
     promise_.set_value(td_api::make_object<td_api::premiumGiftCodeInfo>(
         creator_dialog_id == DialogId() ? nullptr
                                         : get_message_sender_object(td_, creator_dialog_id, "premiumGiftCodeInfo"),
-        result->date_, result->via_giveaway_, message_id.get(), result->months_,
+        result->date_, result->via_giveaway_, message_id.get(),
+        get_premium_duration_day_count(month_count) == result->days_ ? month_count : 0, result->days_,
         td_->user_manager_->get_user_id_object(user_id, "premiumGiftCodeInfo"), result->used_date_));
   }
 
@@ -605,7 +623,7 @@ class SendPremiumGiftQuery final : public Td::ResultHandler {
       }
       case telegram_api::payments_paymentVerificationNeeded::ID:
         LOG(ERROR) << "Receive " << to_string(payment_result);
-        break;
+        return on_error(Status::Error(500, "Receive invalid response"));
       default:
         UNREACHABLE();
     }
@@ -648,13 +666,13 @@ class GetPremiumGiftPaymentFormQuery final : public Td::ResultHandler {
       case telegram_api::payments_paymentForm::ID:
       case telegram_api::payments_paymentFormStarGift::ID:
         LOG(ERROR) << "Receive " << to_string(payment_form_ptr);
-        promise_.set_error(Status::Error(500, "Unsupported"));
+        promise_.set_error(500, "Unsupported");
         break;
       case telegram_api::payments_paymentFormStars::ID: {
         auto payment_form = static_cast<const telegram_api::payments_paymentFormStars *>(payment_form_ptr.get());
         if (payment_form->invoice_->prices_.size() != 1u ||
             payment_form->invoice_->prices_[0]->amount_ != star_count_) {
-          return promise_.set_error(Status::Error(400, "Wrong purchase price specified"));
+          return promise_.set_error(400, "Wrong Premium subscription price specified");
         }
         td_->create_handler<SendPremiumGiftQuery>(std::move(promise_))
             ->send(std::move(send_input_invoice_), payment_form->form_id_);
@@ -1034,6 +1052,10 @@ static string get_premium_source(const td_api::PremiumFeature *feature) {
       return "business";
     case td_api::premiumFeatureMessageEffects::ID:
       return "effects";
+    case td_api::premiumFeatureChecklists::ID:
+      return "todo";
+    case td_api::premiumFeaturePaidMessages::ID:
+      return "paid_messages";
     default:
       UNREACHABLE();
   }
@@ -1209,7 +1231,7 @@ static td_api::object_ptr<td_api::premiumLimit> get_premium_limit_object(Slice k
 void get_premium_limit(const td_api::object_ptr<td_api::PremiumLimitType> &limit_type,
                        Promise<td_api::object_ptr<td_api::premiumLimit>> &&promise) {
   if (limit_type == nullptr) {
-    return promise.set_error(Status::Error(400, "Limit type must be non-empty"));
+    return promise.set_error(400, "Limit type must be non-empty");
   }
 
   promise.set_value(get_premium_limit_object(get_limit_type_key(limit_type.get())));
@@ -1217,18 +1239,20 @@ void get_premium_limit(const td_api::object_ptr<td_api::PremiumLimitType> &limit
 
 void get_premium_features(Td *td, const td_api::object_ptr<td_api::PremiumSource> &source,
                           Promise<td_api::object_ptr<td_api::premiumFeatures>> &&promise) {
-  auto premium_features =
-      full_split(G()->get_option_string(
-                     "premium_features",
-                     "stories,more_upload,double_limits,last_seen,voice_to_text,faster_download,translations,animated_"
-                     "emoji,emoji_status,saved_tags,peer_colors,wallpapers,profile_badge,message_privacy,advanced_chat_"
-                     "management,no_ads,app_icons,infinite_reactions,animated_userpics,premium_stickers,effects"),
-                 ',');
+  auto premium_features = full_split(
+      G()->get_option_string(
+          "premium_features",
+          "stories,more_upload,double_limits,business,last_seen,voice_to_text,faster_download,translations,animated_"
+          "emoji,emoji_status,saved_tags,peer_colors,wallpapers,profile_badge,message_privacy,advanced_chat_management,"
+          "no_ads,app_icons,infinite_reactions,animated_userpics,premium_stickers,effects,todo"),
+      ',');
   vector<td_api::object_ptr<td_api::PremiumFeature>> features;
   for (const auto &premium_feature : premium_features) {
     auto feature = get_premium_feature_object(premium_feature);
     if (feature != nullptr) {
       features.push_back(std::move(feature));
+    } else {
+      LOG(ERROR) << "Receive unsupported Premium feature " << premium_feature;
     }
   }
 
@@ -1301,7 +1325,7 @@ void get_business_features(Td *td, const td_api::object_ptr<td_api::BusinessFeat
 void view_premium_feature(Td *td, const td_api::object_ptr<td_api::PremiumFeature> &feature, Promise<Unit> &&promise) {
   auto source = get_premium_source(feature.get());
   if (source.empty()) {
-    return promise.set_error(Status::Error(400, "Feature must be non-empty"));
+    return promise.set_error(400, "Feature must be non-empty");
   }
 
   vector<tl_object_ptr<telegram_api::jsonObjectValue>> data;
@@ -1390,7 +1414,7 @@ void can_purchase_premium(Td *td, td_api::object_ptr<td_api::StorePaymentPurpose
 void assign_store_transaction(Td *td, td_api::object_ptr<td_api::StoreTransaction> &&transaction,
                               td_api::object_ptr<td_api::StorePaymentPurpose> &&purpose, Promise<Unit> &&promise) {
   if (transaction == nullptr) {
-    return promise.set_error(Status::Error(400, "Transaction must be non-empty"));
+    return promise.set_error(400, "Transaction must be non-empty");
   }
   if (purpose != nullptr && purpose->get_id() == td_api::storePaymentPurposePremiumSubscription::ID) {
     dismiss_suggested_action(SuggestedAction{SuggestedAction::Type::UpgradePremium}, Promise<Unit>());
@@ -1407,7 +1431,7 @@ void assign_store_transaction(Td *td, td_api::object_ptr<td_api::StoreTransactio
       auto type = td_api::move_object_as<td_api::storeTransactionGooglePlay>(transaction);
       if (!clean_input_string(type->package_name_) || !clean_input_string(type->store_product_id_) ||
           !clean_input_string(type->purchase_token_)) {
-        return promise.set_error(Status::Error(400, "Strings must be encoded in UTF-8"));
+        return promise.set_error(400, "Strings must be encoded in UTF-8");
       }
 
       td->create_handler<AssignPlayMarketTransactionQuery>(std::move(promise))

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -38,6 +38,12 @@ int32 VideosManager::get_video_duration(FileId file_id) const {
   auto video = get_video(file_id);
   CHECK(video != nullptr);
   return video->duration;
+}
+
+const string &VideosManager::get_video_mime_type(FileId file_id) const {
+  auto video = get_video(file_id);
+  CHECK(video != nullptr);
+  return video->mime_type;
 }
 
 td_api::object_ptr<td_api::video> VideosManager::get_video_object(FileId file_id) const {

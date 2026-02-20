@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -184,7 +184,7 @@ class Task : public TestClient::Listener {
           TRY_RESULT_PROMISE(callback, obj, std::move(r_obj));
           if (obj->get_id() == td::td_api::error::ID) {
             auto err = move_tl_object_as<td_api::error>(std::move(obj));
-            callback.set_error(Status::Error(err->code_, err->message_));
+            callback.set_error(err->code_, err->message_);
             return;
           }
           callback.set_value(move_tl_object_as<typename ResultT::element_type>(std::move(obj)));
@@ -251,8 +251,7 @@ class InitTask : public Task {
       }
       default:
         LOG(ERROR) << "???";
-        promise_.set_error(
-            Status::Error(PSLICE() << "Unexpected authorization state " << to_string(authorization_state)));
+        promise_.set_error(PSLICE() << "Unexpected authorization state " << to_string(authorization_state));
         stop();
         break;
     }
@@ -337,7 +336,7 @@ class UploadFile : public Task {
     write_file(content_path_, content_).ensure();
 
     send_query(td::make_tl_object<td::td_api::sendMessage>(
-                   chat_id_, 0, nullptr, nullptr, nullptr,
+                   chat_id_, nullptr, nullptr, nullptr, nullptr,
                    td::make_tl_object<td::td_api::inputMessageDocument>(
                        td::make_tl_object<td::td_api::inputFileLocal>(content_path_), nullptr, true,
                        td::make_tl_object<td::td_api::formattedText>("tag", td::Auto()))),

@@ -220,6 +220,7 @@
       <option>Elixir</option>
       <option>Vala</option>
       <option>C</option>
+      <option>Assembly</option>
       <option>G</option>
       <option>Other</option>
     </select>
@@ -398,6 +399,7 @@ function getExampleAnchor(language) {
     case 'Elixir':
     case 'Vala':
     case 'C':
+    case 'Assembly':
     case 'G':
       return language.toLowerCase();
     case 'Object Pascal':
@@ -994,6 +996,10 @@ function onOptionsChanged() {
     }
     commands.push('cd ../..');
   } else {
+    if (low_memory) {
+      commands.push(php + ' SplitSource.php');
+    }
+
     commands.push(use_powershell ? 'Remove-Item build -Force -Recurse -ErrorAction SilentlyContinue' : 'rm -rf build');
     commands.push('mkdir build');
     commands.push('cd build');
@@ -1008,7 +1014,10 @@ function onOptionsChanged() {
     if (target === 'JNI') {
       cmake_init_options.push('-DTD_ENABLE_JNI=ON');
     }
-    if (target === 'C++/CX' || target === 'C++/CLI') {
+    if (target === 'C++/CX') {
+      cmake_init_options.push('-DTD_ENABLE_DOTNET=CX');
+    }
+    if (target === 'C++/CLI') {
       cmake_init_options.push('-DTD_ENABLE_DOTNET=ON');
     }
     if (use_lto) {
@@ -1037,13 +1046,6 @@ function onOptionsChanged() {
       return prefix + cmake + ' ' + options.join(' ') + ' ..';
     }
     commands.push(getCmakeInitCommand(cmake_init_options));
-
-    if (low_memory) {
-      commands.push(cmake + ' --build . --target prepare_cross_compiling');
-      commands.push('cd ..');
-      commands.push(php + ' SplitSource.php');
-      commands.push('cd build');
-    }
 
     let build_command = cmake + ' --build .';
     if (install_dir) {

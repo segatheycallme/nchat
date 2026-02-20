@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -18,6 +18,12 @@ StarGiftSettings::StarGiftSettings(const td_api::object_ptr<td_api::giftSettings
     display_gifts_button_ = settings->show_gift_button_;
     disallowed_gifts_ = DisallowedGiftsSettings(settings->accepted_gift_types_);
   }
+}
+
+StarGiftSettings StarGiftSettings::allow_nothing() {
+  StarGiftSettings result;
+  result.disallowed_gifts_ = DisallowedGiftsSettings::allow_nothing();
+  return result;
 }
 
 td_api::object_ptr<td_api::giftSettings> StarGiftSettings::get_gift_settings_object() const {

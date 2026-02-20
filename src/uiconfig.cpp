@@ -1,6 +1,6 @@
 // uiconfig.cpp
 //
-// Copyright (c) 2019-2025 Kristofer Berggren
+// Copyright (c) 2019-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -20,13 +20,21 @@ void UiConfig::Init()
   {
     { "attachment_indicator", "\xF0\x9F\x93\x8E" },
     { "attachment_open_command", "" },
+    { "auto_compose_command", "" },
+    { "auto_compose_enabled", "0" },
+    { "auto_compose_history_count", "25" },
+    { "auto_select_chat_timeout_sec", "1" },
     { "away_status_indication", "0" },
     { "call_command", "" },
     { "chat_picker_sorted_alphabetically", "0" },
     { "confirm_deletion", "1" },
-    { "desktop_notify_active", "0" },
-    { "desktop_notify_inactive", "0" },
+    { "confirm_send_pasted_image", "1" },
+    { "desktop_notify_active_current", "0" },
+    { "desktop_notify_active_noncurrent", "1" },
     { "desktop_notify_command", "" },
+    { "desktop_notify_connectivity", "1" },
+    { "desktop_notify_enabled", "0" },
+    { "desktop_notify_inactive", "1" },
     { "downloadable_indicator", "+" },
     { "emoji_enabled", "1" },
     { "entry_height", "4" },
@@ -40,6 +48,7 @@ void UiConfig::Init()
     { "list_enabled", "1" },
     { "list_width", "14" },
     { "listdialog_show_filter", "1" },
+    { "mark_read_any_chat", "0" },
     { "mark_read_on_view", "1" },
     { "mark_read_when_inactive", "0" },
     { "message_edit_command", "" },
@@ -57,6 +66,7 @@ void UiConfig::Init()
     { "spell_check_command", "" },
     { "status_broadcast", "1" },
     { "syncing_indicator", "\xe2\x87\x84" },
+    { "tab_size", "4" },
     { "terminal_bell_active", "0" },
     { "terminal_bell_inactive", "1" },
     { "terminal_title", "" },
@@ -64,6 +74,7 @@ void UiConfig::Init()
     { "top_show_version", "0" },
     { "transfer_send_caption", "1" },
     { "typing_status_share", "1" },
+    { "undo_clear_input", "1" },
     { "unread_indicator", "*" },
   };
 

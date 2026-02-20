@@ -63,6 +63,7 @@ Interactive Commands:
     KeyUp       select message
     Alt-d       delete/leave current chat
     Alt-e       external editor compose
+    Alt-i       auto-compose reply
     Alt-n       search contacts
     Alt-t       external telephone call
     Alt-/       find in chat
@@ -96,6 +97,7 @@ Interactive Commands for Text Input:
     Alt-Right   move cursor forward one word
     Alt-Backsp  delete previous word
     Alt-Delete  delete next word
+    Alt-Tab     insert tab (four spaces)
     Alt-c       copy input buffer to clipboard (if no message selected)
     Alt-v       paste into input buffer from clipboard
     Alt-x       cut input buffer to clipboard
@@ -185,6 +187,12 @@ Void
 
     sudo xbps-install base-devel go ccache cmake gperf help2man libmagick-devel readline-devel sqlite-devel file-devel openssl-devel
 
+**Extra Dependencies**
+
+For Wayland-based systems install `wl-clipboard` to enable clipboard functionality.
+
+To support pasting and sending images directly from clipboard `libpng-dev` is needed.
+
 **Build**
 
     mkdir -p build && cd build && cmake .. && make -s
@@ -250,7 +258,7 @@ Security
 ========
 User data is stored locally in `~/.config/nchat`. Default file permissions
 only allow user access, but anyone who can gain access to a user's private
-files can also access the user's personal Telegram data. To protect against
+files can also access the user's personal nchat data. To protect against
 the most simple attack vectors it may be suitable to use disk encryption and
 to ensure `~/.config/nchat` is not backed up unencrypted.
 
@@ -268,11 +276,18 @@ This configuration file holds general application settings. Default content:
     attachment_prefetch=1
     attachment_send_type=1
     cache_enabled=1
+    cache_read_only=0
+    clipboard_copy_command=
+    clipboard_has_image_command=
+    clipboard_paste_command=
+    clipboard_paste_image_command=
     coredump_enabled=0
     downloads_dir=
     emoji_list_all=0
     link_send_preview=1
     logdump_enabled=0
+    mentions_quoted=1
+    message_delete=1
     proxy_host=
     proxy_pass=
     proxy_port=
@@ -280,6 +295,7 @@ This configuration file holds general application settings. Default content:
     timestamp_iso=0
     use_pairing_code=0
     use_qr_terminal=0
+    version_used=
 
 ### assert_abort
 
@@ -304,6 +320,15 @@ Specifies level of attachment prefetching:
 
 Specifies whether to enable cache functionality.
 
+### cache_read_only
+
+Specifies whether to access cache read-only. Primarily intended for debugging.
+
+### clipboard_*_command
+
+Specifies custom clipboard commands to be used instead of system clipboard.
+Refer to [Clipboard](/doc/CLIPBOARD.md) for details.
+
 ### coredump_enabled
 
 Specifies whether to enable core dumps on application crash.
@@ -325,6 +350,18 @@ Specifies whether to enable preview for links in messages sent (Telegram only).
 ### logdump_enabled
 
 Specifies whether to dump warning and error log messages to stdout upon exit.
+
+### mentions_quoted
+
+Specifies whether to use bracket quoting for display-name mentions with spaces.
+
+### message_delete
+
+Specifies handling of message deletion by other users (WhatsApp only):
+
+    1 = erase message <- default
+    2 = replace message with [Deleted] text
+    3 = prefix message with [Deleted] text
 
 ### proxy_
 
@@ -359,6 +396,11 @@ Stores the environment variable flag `USE_QR_TERMINAL` if set during setup.
 It specifies whether to display QR code in the terminal, disabling detection
 of GUI capability for displaying images (WhatsApp only).
 
+### version_used
+
+For internal use only. Stores version used for last successful execution. May
+be used for debugging startup crash / hang regressions.
+
 ~/.config/nchat/ui.conf
 -----------------------
 This configuration file holds general user interface settings. Default content:
@@ -366,12 +408,20 @@ This configuration file holds general user interface settings. Default content:
     attachment_indicator=📎
     attachment_open_command=
     away_status_indication=0
+    auto_compose_command=
+    auto_compose_enabled=0
+    auto_compose_history_count=25
+    auto_select_chat_timeout_sec=1
     call_command=
     chat_picker_sorted_alphabetically=0
     confirm_deletion=1
-    desktop_notify_active=0
+    confirm_send_pasted_image=1
+    desktop_notify_active_current=0
+    desktop_notify_active_noncurrent=1
     desktop_notify_command=
-    desktop_notify_inactive=0
+    desktop_notify_connectivity=1
+    desktop_notify_enabled=0
+    desktop_notify_inactive=1
     downloadable_indicator=+
     emoji_enabled=1
     entry_height=4
@@ -385,6 +435,7 @@ This configuration file holds general user interface settings. Default content:
     list_enabled=1
     list_width=14
     listdialog_show_filter=1
+    mark_read_any_chat=0
     mark_read_on_view=1
     mark_read_when_inactive=0
     message_edit_command=
@@ -402,6 +453,7 @@ This configuration file holds general user interface settings. Default content:
     spell_check_command=
     status_broadcast=1
     syncing_indicator=⇄
+    tab_size=4
     terminal_bell_active=0
     terminal_bell_inactive=1
     terminal_title=
@@ -409,6 +461,7 @@ This configuration file holds general user interface settings. Default content:
     top_show_version=0
     transfer_send_caption=1
     typing_status_share=1
+    undo_clear_input=1
     unread_indicator=*
 
 ### attachment_indicator
@@ -435,6 +488,37 @@ status with other users. I.e. the status will read `Away` instead of `Online`
 when the terminal is inactive (assuming `online_status_share=1` and
 `online_status_dynamic=1`).
 
+
+### auto_compose_command
+
+Specifies a custom command to use to auto-compose message reply. The
+command shall include `%1` which will be replaced by the path of a temporary
+text file with message history. If not specified, the following default
+command is used:
+
+    (prefix)/libexec/nchat/compose -c '%1'
+
+Refer to [Auto-Compose](/doc/AUTOCOMPOSE.md) for details.
+
+### auto_compose_enabled
+
+Specifies whether to enable using auto-compose. The reason for not enabling
+it by default is that the `compose` tool may use third-party services (if API
+key is set up in the shell environment) that can incur costs.
+
+### auto_compose_history_count
+
+Specifies the maximum number of chat messages up to latest (or current
+selected) to pass to the auto-compose tool.
+
+### auto_select_chat_timeout_sec
+
+Specifies a timeout after receiving previous history sync message (with
+timestamp before the application went online) for automatically setting
+current chat. If disabled (value 0) current chat will only be set upon
+any user input, or receiving a message with timestamp after application
+went online (connected to server).
+
 ### call_command
 
 Specifies a custom command to use for starting a call using an external
@@ -457,10 +541,20 @@ list order.
 Specifies whether to prompt the user for confirmation when deleting a message
 or a chat.
 
-### desktop_notify_active
+### confirm_send_pasted_image
 
-Specifies whether new message shall trigger desktop notification when nchat
-terminal window is active.
+Specifies whether to prompt the user for confirmation when pasting an image
+to a chat.
+
+### desktop_notify_active_current
+
+Specifies whether new message in current chat shall trigger desktop
+notification when nchat terminal window is active.
+
+### desktop_notify_active_noncurrent
+
+Specifies whether new message in non-current chat shall trigger desktop
+notification when nchat terminal window is active.
 
 ### desktop_notify_command
 
@@ -472,6 +566,17 @@ prevent shell injection). Default command used, if not specified:
 Linux: `notify-send 'nchat' '%1: %2'`
 
 macOS: `osascript -e 'display notification "%1: %2" with title "nchat"'`
+
+### desktop_notify_connectivity
+
+Specifies whether change of connectivity status (going offline or back online)
+shall trigger desktop notification.
+
+### desktop_notify_enabled
+
+Specifies whether desktop notifications are permitted. Simply enabling this
+parameter will not display notifications, unless other `desktop_notify_*`
+parameters are enabled.
 
 ### desktop_notify_inactive
 
@@ -550,6 +655,12 @@ Specifies width of chat list.
 ### listdialog_show_filter
 
 Specifies whether list dialogs should display the search filter input by user.
+
+### mark_read_any_chat
+
+Specifies whether nchat may mark messages as read before current chat has
+been set (either through user activity or time elapsed since last old sync
+message was received).
 
 ### mark_read_on_view
 
@@ -641,6 +752,10 @@ Specifies (WhatsApp) Status Updates chat level of visibility:
 Specifies text to suffix attachment filenames in message view for downloads
 in progress.
 
+### tab_size
+
+Specifies number of spaces to insert when user inputs a tab character.
+
 ### terminal_bell_active
 
 Specifies whether new message shall trigger terminal bell when nchat terminal
@@ -672,6 +787,11 @@ Specifies if entered text should be sent as caption when transferring a file.
 Specifies whether to share typing status with other user(s) in the
 conversation.
 
+### undo_clear_input
+
+Specifies whether undoing clearing of input buffer (by pressing ctrl-c again)
+is enabled.
+
 ### unread_indicator
 
 Specifies the character to suffix chats with unread messages in the chat list.
@@ -680,6 +800,7 @@ Specifies the character to suffix chats with unread messages in the chat list.
 ------------------------
 This configuration file holds user interface key bindings. Default content:
 
+    auto_compose=\33\151
     backspace=KEY_BACKSPACE
     backspace_alt=KEY_ALT_BACKSPACE
     backward_kill_word=\33\177
@@ -730,6 +851,7 @@ This configuration file holds user interface key bindings. Default content:
     select_emoji=KEY_CTRLS
     send_msg=KEY_CTRLX
     spell=\33\44
+    tab=\33\11
     terminal_focus_in=KEY_FOCUS_IN
     terminal_focus_out=KEY_FOCUS_OUT
     terminal_resize=KEY_RESIZE
@@ -794,6 +916,8 @@ This configuration file holds user interface color settings. Default content:
     list_attr_selected=reverse
     list_color_bg=
     list_color_fg=
+    list_color_unread_bg=
+    list_color_unread_fg=
     listborder_attr=
     listborder_color_bg=
     listborder_color_fg=
@@ -960,7 +1084,7 @@ determine the key codes and modify `~/.config/nchat/key.conf` accordingly.
 
 ### 2. Send messages with Enter key?
 
-To simply send on enter key press and skip message compose with linebreaks,
+To simply send on Enter key press and skip message compose with linebreaks,
 one can just set `send_msg=KEY_RETURN` in `~/.config/nchat/key.conf`.
 
 To also be able to compose messages with linebreaks using Alt/Opt-Enter, edit
@@ -1040,6 +1164,11 @@ Alternatively one can [Build from Source](#build-from-source) using the
 `make.sh` script, which sets parallel job count based on the system
 capabilities.
 
+### 9. Terminal transparency is not working?
+
+If on Linux, try removing any custom default background set up, i.e. set
+`default_color_bg=` in `~/.config/nchat/color.conf`.
+
 
 Project Scope
 =============
@@ -1047,8 +1176,6 @@ Project Scope
 Limitations
 -----------
 There are no plans to support the following features:
-- Facebook Messenger
-- Signal
 - Telegram secret chats
 - Voice / video calls
 
@@ -1104,16 +1231,24 @@ nchat is primarily implemented in C++ with some parts in Go. Its source tree
 includes the source code of the following third-party libraries:
 
 - [apathy](https://github.com/dlecocq/apathy) -
-  Copyright 2013 Dan Lecocq - [MIT License](/ext/apathy/LICENSE)
+  Copyright 2013 Dan Lecocq -
+  [MIT License](/ext/apathy/LICENSE)
 
 - [cereal](https://github.com/USCiLab/cereal) -
-  Copyright 2013 Randolph Voorhies, Shane Grant - [BSD-3 License](/ext/cereal/LICENSE)
+  Copyright 2013 Randolph Voorhies, Shane Grant -
+  [BSD-3 License](/ext/cereal/LICENSE)
 
 - [clip](https://github.com/dacap/clip) -
-  Copyright 2015 David Capello - [MIT License](/ext/clip/LICENSE.txt)
+  Copyright 2015 David Capello -
+  [MIT License](/ext/clip/LICENSE.txt)
+
+- [mautrix-signal](https://github.com/mautrix/signal) -
+  Copyright 2020 Tulir Asokan -
+  [AGPL License](/lib/sgchat/go/ext/signal/LICENSE)
 
 - [sqlite_modern_cpp](https://github.com/SqliteModernCpp/sqlite_modern_cpp) -
-  Copyright 2017 aminroosta - [MIT License](/ext/sqlite_modern_cpp/License.txt)
+  Copyright 2017 aminroosta -
+  [MIT License](/ext/sqlite_modern_cpp/License.txt)
 
 - [tdlib](https://github.com/tdlib/td) -
   Copyright 2014 Aliaksei Levin, Arseny Smirnov -

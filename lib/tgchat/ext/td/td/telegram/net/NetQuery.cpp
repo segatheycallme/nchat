@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -12,6 +12,7 @@
 
 #include "td/utils/algorithm.h"
 #include "td/utils/as.h"
+#include "td/utils/Gzip.h"
 #include "td/utils/misc.h"
 #include "td/utils/SliceBuilder.h"
 #include "td/utils/Time.h"
@@ -175,11 +176,22 @@ void NetQuery::add_verification_prefix(const string &prefix) {
   CHECK(is_ready());
   CHECK(is_error());
   CHECK(!query_.empty());
+  if (gzip_flag_ == GzipFlag::On) {
+    query_ = gzdecode(query_);
+  }
   BufferSlice query(prefix.size() + query_.size() - verification_prefix_length_);
   query.as_mutable_slice().copy_from(prefix);
   query.as_mutable_slice().substr(prefix.size()).copy_from(query_.as_slice().substr(verification_prefix_length_));
   verification_prefix_length_ = narrow_cast<int32>(prefix.size());
   query_ = std::move(query);
+  if (gzip_flag_ == GzipFlag::On) {
+    BufferSlice compressed = gzencode(query_, 0.9);
+    if (compressed.empty()) {
+      gzip_flag_ = GzipFlag::Off;
+    } else {
+      query_ = std::move(compressed);
+    }
+  }
 }
 
 }  // namespace td

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -35,7 +35,7 @@ class ThemeSettings {
   td_api::object_ptr<td_api::themeSettings> get_theme_settings_object(Td *td) const;
 
   bool is_empty() const {
-    return message_colors_.empty();
+    return *this == ThemeSettings();
   }
 
   bool are_dark() const {

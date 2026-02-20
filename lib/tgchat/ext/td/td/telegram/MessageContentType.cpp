@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -164,6 +164,26 @@ StringBuilder &operator<<(StringBuilder &string_builder, MessageContentType cont
       return string_builder << "PaidMessagesPrice";
     case MessageContentType::ConferenceCall:
       return string_builder << "ConferenceCall";
+    case MessageContentType::ToDoList:
+      return string_builder << "ToDoList";
+    case MessageContentType::TodoCompletions:
+      return string_builder << "ToDoCompleted";
+    case MessageContentType::TodoAppendTasks:
+      return string_builder << "ToDoAppendTasks";
+    case MessageContentType::GiftTon:
+      return string_builder << "GiftTon";
+    case MessageContentType::SuggestedPostSuccess:
+      return string_builder << "SuggestedPostSuccess";
+    case MessageContentType::SuggestedPostRefund:
+      return string_builder << "SuggestedPostRefund";
+    case MessageContentType::SuggestedPostApproval:
+      return string_builder << "SuggestedPostApproval";
+    case MessageContentType::SuggestBirthday:
+      return string_builder << "SuggestBirthday";
+    case MessageContentType::StarGiftPurchaseOffer:
+      return string_builder << "GiftPurchaseOffer";
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
+      return string_builder << "GiftPurchaseOfferDeclined";
     default:
       return string_builder << "Invalid type " << static_cast<int32>(content_type);
   }
@@ -260,6 +280,16 @@ bool is_allowed_media_group_content(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::ToDoList:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return false;
     default:
       UNREACHABLE();
@@ -350,6 +380,16 @@ bool can_be_secret_message_content(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::ToDoList:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return false;
     default:
       UNREACHABLE();
@@ -436,6 +476,16 @@ bool can_be_local_message_content(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::ToDoList:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return false;
     default:
       UNREACHABLE();
@@ -466,6 +516,7 @@ bool is_service_message_content(MessageContentType content_type) {
     case MessageContentType::Sticker:
     case MessageContentType::Story:
     case MessageContentType::Text:
+    case MessageContentType::ToDoList:
     case MessageContentType::Unsupported:
     case MessageContentType::Venue:
     case MessageContentType::Video:
@@ -522,6 +573,15 @@ bool is_service_message_content(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return true;
     default:
       UNREACHABLE();
@@ -538,6 +598,7 @@ bool is_editable_message_content(MessageContentType content_type) {
     case MessageContentType::PaidMedia:
     case MessageContentType::Photo:
     case MessageContentType::Text:
+    case MessageContentType::ToDoList:
     case MessageContentType::Video:
     case MessageContentType::VoiceNote:
       return true;
@@ -608,6 +669,15 @@ bool is_editable_message_content(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return false;
     default:
       UNREACHABLE();
@@ -633,6 +703,7 @@ bool is_supported_reply_message_content(MessageContentType content_type) {
     case MessageContentType::Sticker:
     case MessageContentType::Story:
     case MessageContentType::Text:
+    case MessageContentType::ToDoList:
     case MessageContentType::Unsupported:
     case MessageContentType::Venue:
     case MessageContentType::Video:
@@ -758,6 +829,16 @@ bool can_have_message_content_caption(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::ToDoList:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return false;
     default:
       UNREACHABLE();
@@ -789,6 +870,7 @@ bool can_send_message_content_to_secret_chat(MessageContentType content_type) {
     case MessageContentType::PaidMedia:
     case MessageContentType::Poll:
     case MessageContentType::Story:
+    case MessageContentType::ToDoList:
       return false;
     case MessageContentType::None:
     case MessageContentType::ChatCreate:
@@ -846,6 +928,15 @@ bool can_send_message_content_to_secret_chat(MessageContentType content_type) {
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::GiftTon:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
     default:
       UNREACHABLE();
       return false;
@@ -893,6 +984,7 @@ bool get_default_service_message_content_reactions_are_possible(MessageContentTy
     case MessageContentType::Sticker:
     case MessageContentType::Story:
     case MessageContentType::Text:
+    case MessageContentType::ToDoList:
     case MessageContentType::Unsupported:
     case MessageContentType::Venue:
     case MessageContentType::Video:
@@ -911,6 +1003,7 @@ bool get_default_service_message_content_reactions_are_possible(MessageContentTy
     case MessageContentType::RequestedDialog:
     case MessageContentType::GiveawayLaunch:
     case MessageContentType::DialogShared:
+    case MessageContentType::GiftTon:
       return false;
     case MessageContentType::ChatChangeTitle:
     case MessageContentType::ChatChangePhoto:
@@ -949,6 +1042,14 @@ bool get_default_service_message_content_reactions_are_possible(MessageContentTy
     case MessageContentType::PaidMessagesRefunded:
     case MessageContentType::PaidMessagesPrice:
     case MessageContentType::ConferenceCall:
+    case MessageContentType::TodoCompletions:
+    case MessageContentType::TodoAppendTasks:
+    case MessageContentType::SuggestedPostSuccess:
+    case MessageContentType::SuggestedPostRefund:
+    case MessageContentType::SuggestedPostApproval:
+    case MessageContentType::SuggestBirthday:
+    case MessageContentType::StarGiftPurchaseOffer:
+    case MessageContentType::StarGiftPurchaseOfferDeclined:
       return true;
     default:
       UNREACHABLE();

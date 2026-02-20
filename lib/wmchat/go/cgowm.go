@@ -9,9 +9,9 @@ package main
 
 // #cgo linux LDFLAGS: -Wl,-unresolved-symbols=ignore-all
 // #cgo darwin LDFLAGS: -Wl,-undefined,dynamic_lookup
-// extern void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Phone, int p_IsSelf, int p_IsNotify);
+// extern void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Phone, int p_IsSelf, int p_IsAlias, int p_Notify);
 // extern void WmNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMuted, int p_IsPinned, int p_LastMessageTime);
-// extern void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe, char* p_QuotedId, char* p_FileId, char* p_FilePath, int p_FileStatus, int p_TimeSent, int p_IsRead, int p_IsEditCaption);
+// extern void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe, char* p_QuotedId, char* p_FileId, char* p_FilePath, int p_FileStatus, int p_TimeSent, int p_IsRead, int p_IsEdited);
 // extern void WmNewStatusNotify(int p_ConnId, char* p_UserId, int p_IsOnline, int p_TimeSeen);
 // extern void WmNewTypingNotify(int p_ConnId, char* p_ChatId, char* p_UserId, int p_IsTyping);
 // extern void WmNewMessageStatusNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsRead);
@@ -23,8 +23,8 @@ package main
 // extern void WmUpdatePinNotify(int p_ConnId, char* p_ChatId, int p_IsPinned, int p_TimePinned);
 // extern void WmReinit(int p_ConnId);
 // extern void WmSetProtocolUiControl(int p_ConnId, int p_IsTakeControl);
-// extern void WmSetStatus(int p_Flags);
-// extern void WmClearStatus(int p_Flags);
+// extern void WmSetStatus(int p_ConnId, int p_Flags);
+// extern void WmClearStatus(int p_ConnId, int p_Flags);
 // extern int WmAppConfigGetNum(char* p_Param);
 // extern void WmAppConfigSetNum(char* p_Param, int p_Value);
 // extern void WmLogTrace(char* p_Filename, int p_LineNo, char* p_Message);
@@ -119,16 +119,16 @@ func CWmSendReaction(connId int, chatId *C.char, senderId *C.char, msgId *C.char
 	return WmSendReaction(connId, C.GoString(chatId), C.GoString(senderId), C.GoString(msgId), C.GoString(emoji))
 }
 
-func CWmNewContactsNotify(connId int, chatId string, name string, phone string, isSelf int, isNotify int) {
-	C.WmNewContactsNotify(C.int(connId), C.CString(chatId), C.CString(name), C.CString(phone), C.int(isSelf), C.int(isNotify))
+func CWmNewContactsNotify(connId int, chatId string, name string, phone string, isSelf int, isAlias int, notify int) {
+	C.WmNewContactsNotify(C.int(connId), C.CString(chatId), C.CString(name), C.CString(phone), C.int(isSelf), C.int(isAlias), C.int(notify))
 }
 
 func CWmNewChatsNotify(connId int, chatId string, isUnread int, isMuted int, isPinned int, lastMessageTime int) {
 	C.WmNewChatsNotify(C.int(connId), C.CString(chatId), C.int(isUnread), C.int(isMuted), C.int(isPinned), C.int(lastMessageTime))
 }
 
-func CWmNewMessagesNotify(connId int, chatId string, msgId string, senderId string, text string, fromMe int, quotedId string, fileId string, filePath string, fileStatus int, timeSent int, isRead int, isEditCaption int) {
-	C.WmNewMessagesNotify(C.int(connId), C.CString(chatId), C.CString(msgId), C.CString(senderId), C.CString(text), C.int(fromMe), C.CString(quotedId), C.CString(fileId), C.CString(filePath), C.int(fileStatus), C.int(timeSent), C.int(isRead), C.int(isEditCaption))
+func CWmNewMessagesNotify(connId int, chatId string, msgId string, senderId string, text string, fromMe int, quotedId string, fileId string, filePath string, fileStatus int, timeSent int, isRead int, isEdited int) {
+	C.WmNewMessagesNotify(C.int(connId), C.CString(chatId), C.CString(msgId), C.CString(senderId), C.CString(text), C.int(fromMe), C.CString(quotedId), C.CString(fileId), C.CString(filePath), C.int(fileStatus), C.int(timeSent), C.int(isRead), C.int(isEdited))
 }
 
 func CWmNewStatusNotify(connId int, userId string, isOnline int, timeSeen int) {
@@ -175,12 +175,12 @@ func CWmSetProtocolUiControl(connId int, isTakeControl int) {
 	C.WmSetProtocolUiControl(C.int(connId), C.int(isTakeControl))
 }
 
-func CWmSetStatus(flags int) {
-	C.WmSetStatus(C.int(flags))
+func CWmSetStatus(connId int, flags int) {
+	C.WmSetStatus(C.int(connId), C.int(flags))
 }
 
-func CWmClearStatus(flags int) {
-	C.WmClearStatus(C.int(flags))
+func CWmClearStatus(connId int, flags int) {
+	C.WmClearStatus(C.int(connId), C.int(flags))
 }
 
 func CWmAppConfigGetNum(param string) int {

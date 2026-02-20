@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -27,6 +27,7 @@
 #include "td/telegram/MessageQuote.h"
 #include "td/telegram/MessageReplyHeader.h"
 #include "td/telegram/MessageSelfDestructType.h"
+#include "td/telegram/MessageTopic.h"
 #include "td/telegram/misc.h"
 #include "td/telegram/OptionManager.h"
 #include "td/telegram/ReplyMarkup.h"
@@ -245,8 +246,8 @@ class QuickReplyManager::SendQuickReplyMessageQuery final : public Td::ResultHan
     shortcut_id_ = m->shortcut_id;
 
     int32 flags = telegram_api::messages_sendMessage::QUICK_REPLY_SHORTCUT_MASK;
-    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote())
-                        .get_input_reply_to(td_, MessageId(), SavedMessagesTopicId());
+    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote(), 0)
+                        .get_input_reply_to(td_, MessageTopic());
     if (reply_to != nullptr) {
       flags |= telegram_api::messages_sendMessage::REPLY_TO_MASK;
     }
@@ -262,8 +263,8 @@ class QuickReplyManager::SendQuickReplyMessageQuery final : public Td::ResultHan
         telegram_api::messages_sendMessage(
             flags, m->disable_web_page_preview, false, false, false, false, false, m->invert_media, false,
             telegram_api::make_object<telegram_api::inputPeerSelf>(), std::move(reply_to), message_text->text,
-            m->random_id, nullptr, std::move(entities), 0, nullptr,
-            td_->quick_reply_manager_->get_input_quick_reply_shortcut(m->shortcut_id), 0, 0),
+            m->random_id, nullptr, std::move(entities), 0, 0, nullptr,
+            td_->quick_reply_manager_->get_input_quick_reply_shortcut(m->shortcut_id), 0, 0, nullptr),
         {{"me"}}));
   }
 
@@ -299,8 +300,8 @@ class QuickReplyManager::SendQuickReplyInlineMessageQuery final : public Td::Res
     shortcut_id_ = m->shortcut_id;
 
     int32 flags = telegram_api::messages_sendInlineBotResult::QUICK_REPLY_SHORTCUT_MASK;
-    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote())
-                        .get_input_reply_to(td_, MessageId(), SavedMessagesTopicId());
+    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote(), 0)
+                        .get_input_reply_to(td_, MessageTopic());
     if (reply_to != nullptr) {
       flags |= telegram_api::messages_sendInlineBotResult::REPLY_TO_MASK;
     }
@@ -359,8 +360,8 @@ class QuickReplyManager::SendQuickReplyMediaQuery final : public Td::ResultHandl
     was_thumbnail_uploaded_ = FileManager::extract_was_thumbnail_uploaded(input_media);
 
     int32 flags = telegram_api::messages_sendMedia::QUICK_REPLY_SHORTCUT_MASK;
-    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote())
-                        .get_input_reply_to(td_, MessageId(), SavedMessagesTopicId());
+    auto reply_to = MessageInputReplyTo(m->reply_to_message_id, DialogId(), MessageQuote(), 0)
+                        .get_input_reply_to(td_, MessageTopic());
     if (reply_to != nullptr) {
       flags |= telegram_api::messages_sendMedia::REPLY_TO_MASK;
     }
@@ -378,8 +379,8 @@ class QuickReplyManager::SendQuickReplyMediaQuery final : public Td::ResultHandl
         telegram_api::messages_sendMedia(
             flags, false, false, false, false, false, m->invert_media, false,
             telegram_api::make_object<telegram_api::inputPeerSelf>(), std::move(reply_to), std::move(input_media),
-            message_text == nullptr ? string() : message_text->text, m->random_id, nullptr, std::move(entities), 0,
-            nullptr, td_->quick_reply_manager_->get_input_quick_reply_shortcut(m->shortcut_id), 0, 0),
+            message_text == nullptr ? string() : message_text->text, m->random_id, nullptr, std::move(entities), 0, 0,
+            nullptr, td_->quick_reply_manager_->get_input_quick_reply_shortcut(m->shortcut_id), 0, 0, nullptr),
         {{"me"}}));
   }
 
@@ -513,7 +514,7 @@ class QuickReplyManager::UploadQuickReplyMediaQuery final : public Td::ResultHan
         td_->quick_reply_manager_->on_send_message_file_error(shortcut_id_, random_id_, {-1});
         return;
       } else {
-        LOG(ERROR) << "Receive file reference error for UploadMediaQuery";
+        LOG(ERROR) << "Receive file reference error for UploadQuickReplyMediaQuery";
       }
     }
     if (was_uploaded_) {
@@ -561,8 +562,8 @@ class QuickReplyManager::SendQuickReplyMultiMediaQuery final : public Td::Result
     CHECK(file_ids_.size() == random_ids_.size());
 
     int32 flags = telegram_api::messages_sendMultiMedia::QUICK_REPLY_SHORTCUT_MASK;
-    auto reply_to = MessageInputReplyTo(reply_to_message_id, DialogId(), MessageQuote())
-                        .get_input_reply_to(td_, MessageId(), SavedMessagesTopicId());
+    auto reply_to =
+        MessageInputReplyTo(reply_to_message_id, DialogId(), MessageQuote(), 0).get_input_reply_to(td_, MessageTopic());
     if (reply_to != nullptr) {
       flags |= telegram_api::messages_sendMultiMedia::REPLY_TO_MASK;
     }
@@ -673,7 +674,7 @@ class QuickReplyManager::EditQuickReplyMessageQuery final : public Td::ResultHan
                                            telegram_api::make_object<telegram_api::inputPeerSelf>(),
                                            m->message_id.get_server_message_id().get(),
                                            text != nullptr ? text->text : string(), std::move(input_media), nullptr,
-                                           std::move(entities), 0, m->shortcut_id.get()),
+                                           std::move(entities), 0, 0, m->shortcut_id.get()),
         {{"me"}}));
   }
 
@@ -1059,7 +1060,7 @@ unique_ptr<QuickReplyManager::QuickReplyMessage> QuickReplyManager::create_messa
         LOG(ERROR) << "Receive invalid quick reply " << shortcut_id << " from " << source;
         break;
       }
-      if (!message_id.is_valid() || !message_id.is_server()) {
+      if (!message_id.is_server()) {
         LOG(ERROR) << "Receive invalid " << message_id << " in quick reply " << shortcut_id << " from " << source;
         break;
       }
@@ -1097,7 +1098,7 @@ unique_ptr<QuickReplyManager::QuickReplyMessage> QuickReplyManager::create_messa
           std::move(message->media_), my_dialog_id, message->date_, true, via_bot_user_id, &ttl,
           &disable_web_page_preview, source);
 
-      auto reply_header = MessageReplyHeader(td_, std::move(message->reply_to_), my_dialog_id, message_id, -1, false);
+      auto reply_header = MessageReplyHeader(td_, std::move(message->reply_to_), my_dialog_id, message_id, -1);
       if (reply_header.story_full_id_ != StoryFullId()) {
         LOG(ERROR) << "Receive reply to " << reply_header.story_full_id_;
         reply_header.story_full_id_ = {};
@@ -1117,8 +1118,7 @@ unique_ptr<QuickReplyManager::QuickReplyMessage> QuickReplyManager::create_messa
 
       auto content_type = content->get_type();
       if (is_service_message_content(content_type) || content_type == MessageContentType::LiveLocation ||
-          is_expired_message_content(content_type) || content_type == MessageContentType::Poll ||
-          content_type == MessageContentType::PaidMedia) {
+          is_expired_message_content(content_type) || content_type == MessageContentType::PaidMedia) {
         LOG(ERROR) << "Receive " << content_type << " from " << source;
         break;
       }
@@ -1211,11 +1211,11 @@ td_api::object_ptr<td_api::MessageSendingState> QuickReplyManager::get_message_s
 td_api::object_ptr<td_api::MessageContent> QuickReplyManager::get_quick_reply_message_message_content_object(
     const QuickReplyMessage *m) const {
   if (m->edited_content != nullptr) {
-    return get_message_content_object(m->edited_content.get(), td_, DialogId(), MessageId(), false, DialogId(), 0,
+    return get_message_content_object(m->edited_content.get(), td_, DialogId(), MessageId(), true, false, DialogId(), 0,
                                       false, true, -1, m->edited_invert_media, m->edited_disable_web_page_preview);
   }
-  return get_message_content_object(m->content.get(), td_, DialogId(), m->message_id, false, DialogId(), 0, false, true,
-                                    -1, m->invert_media, m->disable_web_page_preview);
+  return get_message_content_object(m->content.get(), td_, DialogId(), m->message_id, true, false, DialogId(), 0, false,
+                                    true, -1, m->invert_media, m->disable_web_page_preview);
 }
 
 td_api::object_ptr<td_api::quickReplyMessage> QuickReplyManager::get_quick_reply_message_object(
@@ -1494,13 +1494,13 @@ void QuickReplyManager::set_quick_reply_shortcut_name(QuickReplyShortcutId short
   load_quick_reply_shortcuts();
   const auto *shortcut = get_shortcut(shortcut_id);
   if (shortcut == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   if (check_shortcut_name(name).is_error()) {
-    return promise.set_error(Status::Error(400, "Shortcut name is invalid"));
+    return promise.set_error(400, "Shortcut name is invalid");
   }
   if (!shortcut_id.is_server()) {
-    return promise.set_error(Status::Error(400, "Shortcut isn't created yet"));
+    return promise.set_error(400, "Shortcut isn't created yet");
   }
   auto query_promise = PromiseCreator::lambda(
       [actor_id = actor_id(this), shortcut_id, name, promise = std::move(promise)](Result<Unit> &&result) mutable {
@@ -1536,7 +1536,7 @@ void QuickReplyManager::delete_quick_reply_shortcut(QuickReplyShortcutId shortcu
   load_quick_reply_shortcuts();
   auto it = get_shortcut_it(shortcut_id);
   if (it == shortcuts_.shortcuts_.end()) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   send_update_quick_reply_shortcut_deleted(it->get());
   shortcuts_.shortcuts_.erase(it);
@@ -1564,13 +1564,13 @@ void QuickReplyManager::reorder_quick_reply_shortcuts(const vector<QuickReplySho
   FlatHashSet<QuickReplyShortcutId, QuickReplyShortcutIdHash> unique_shortcut_ids;
   for (const auto &shortcut_id : shortcut_ids) {
     if (get_shortcut(shortcut_id) == nullptr) {
-      return promise.set_error(Status::Error(400, "Shortcut not found"));
+      return promise.set_error(400, "Shortcut not found");
     }
     CHECK(shortcut_id.is_valid());
     unique_shortcut_ids.insert(shortcut_id);
   }
   if (unique_shortcut_ids.size() != shortcut_ids.size()) {
-    return promise.set_error(Status::Error(400, "Duplicate shortcut identifiers specified"));
+    return promise.set_error(400, "Duplicate shortcut identifiers specified");
   }
   if (!shortcuts_.are_inited_) {
     return promise.set_value(Unit());
@@ -1622,7 +1622,7 @@ void QuickReplyManager::update_quick_reply_message(telegram_api::object_ptr<tele
   auto shortcut_id = message->shortcut_id;
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return reload_quick_reply_messages(shortcut_id, Promise<Unit>());
+    return reload_quick_reply_shortcuts();
   }
   on_get_quick_reply_message(s, std::move(message));
 }
@@ -1766,7 +1766,7 @@ void QuickReplyManager::delete_quick_reply_shortcut_messages(QuickReplyShortcutI
   load_quick_reply_shortcuts();
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   if (message_ids.empty()) {
     return promise.set_value(Unit());
@@ -1775,7 +1775,7 @@ void QuickReplyManager::delete_quick_reply_shortcut_messages(QuickReplyShortcutI
   vector<MessageId> deleted_server_message_ids;
   for (auto &message_id : message_ids) {
     if (!message_id.is_valid()) {
-      return promise.set_error(Status::Error(400, "Invalid message identifier"));
+      return promise.set_error(400, "Invalid message identifier");
     }
 
     // message_id = get_persistent_message_id(s, message_id);
@@ -2777,14 +2777,14 @@ void QuickReplyManager::edit_quick_reply_message(
   load_quick_reply_shortcuts();
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   auto *m = get_message_editable(s, message_id);
   if (m == nullptr) {
-    return promise.set_error(Status::Error(400, "Message not found"));
+    return promise.set_error(400, "Message not found");
   }
   if (!can_edit_quick_reply_message(m)) {
-    return promise.set_error(Status::Error(400, "Message can't be edited"));
+    return promise.set_error(400, "Message can't be edited");
   }
 
   TRY_RESULT_PROMISE(promise, message_content, process_input_message_content(std::move(input_message_content)));
@@ -2804,16 +2804,16 @@ void QuickReplyManager::edit_quick_reply_message(
           new_message_content_type != MessageContentType::Video &&
           (new_message_content_type != MessageContentType::Text ||
            old_message_content_type != MessageContentType::Text)) {
-        return promise.set_error(Status::Error(400, "Message can't be edited to the specified message type"));
+        return promise.set_error(400, "Message can't be edited to the specified message type");
       }
       if (m->media_album_id != 0) {
         if (old_message_content_type != new_message_content_type) {
           if (!is_allowed_media_group_content(new_message_content_type)) {
-            return promise.set_error(Status::Error(400, "Message content type can't be used in an album"));
+            return promise.set_error(400, "Message content type can't be used in an album");
           }
           if (is_homogenous_media_group_content(old_message_content_type) ||
               is_homogenous_media_group_content(new_message_content_type)) {
-            return promise.set_error(Status::Error(400, "Can't change media type in the album"));
+            return promise.set_error(400, "Can't change media type in the album");
           }
         }
       }
@@ -2822,7 +2822,12 @@ void QuickReplyManager::edit_quick_reply_message(
       if (new_message_content_type != MessageContentType::VoiceNote ||
           get_message_content_any_file_id(m->content.get()) !=
               get_message_content_any_file_id(message_content.content.get())) {
-        return promise.set_error(Status::Error(400, "Only caption can be edited in voice note messages"));
+        return promise.set_error(400, "Only caption can be edited in voice note messages");
+      }
+      break;
+    case MessageContentType::ToDoList:
+      if (new_message_content_type != MessageContentType::ToDoList) {
+        return promise.set_error(400, "Checklists can be edited only to a checklist");
       }
       break;
     default:
@@ -3012,7 +3017,7 @@ void QuickReplyManager::get_quick_reply_shortcut_messages(QuickReplyShortcutId s
   load_quick_reply_shortcuts();
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   if (have_all_shortcut_messages(s)) {
     return promise.set_value(Unit());
@@ -3024,7 +3029,7 @@ void QuickReplyManager::get_quick_reply_shortcut_messages(QuickReplyShortcutId s
 
 void QuickReplyManager::reload_quick_reply_messages(QuickReplyShortcutId shortcut_id, Promise<Unit> &&promise) {
   if (td_->auth_manager_->is_bot()) {
-    return promise.set_error(Status::Error(400, "Not supported by bots"));
+    return promise.set_error(400, "Not supported by bots");
   }
 
   load_quick_reply_shortcuts();
@@ -3037,17 +3042,20 @@ void QuickReplyManager::reload_quick_reply_messages(QuickReplyShortcutId shortcu
   if (queries.size() != 1) {
     return;
   }
-  auto query_promise =
-      PromiseCreator::lambda([actor_id = actor_id(this), shortcut_id](
-                                 Result<telegram_api::object_ptr<telegram_api::messages_Messages>> r_messages) {
-        send_closure(actor_id, &QuickReplyManager::on_reload_quick_reply_messages, shortcut_id, std::move(r_messages));
+  auto *s = get_shortcut(shortcut_id);
+  auto query_promise = PromiseCreator::lambda(
+      [actor_id = actor_id(this), shortcut_id, shortcut_name = (s == nullptr ? string() : s->name_)](
+          Result<telegram_api::object_ptr<telegram_api::messages_Messages>> r_messages) {
+        send_closure(actor_id, &QuickReplyManager::on_reload_quick_reply_messages, shortcut_id, shortcut_name,
+                     std::move(r_messages));
       });
   td_->create_handler<GetQuickReplyMessagesQuery>(std::move(query_promise))
       ->send(shortcut_id, vector<MessageId>(), get_quick_reply_messages_hash(get_shortcut(shortcut_id)));
 }
 
 void QuickReplyManager::on_reload_quick_reply_messages(
-    QuickReplyShortcutId shortcut_id, Result<telegram_api::object_ptr<telegram_api::messages_Messages>> r_messages) {
+    QuickReplyShortcutId shortcut_id, const string &old_shortcut_name,
+    Result<telegram_api::object_ptr<telegram_api::messages_Messages>> r_messages) {
   G()->ignore_result_if_closing(r_messages);
   auto queries_it = get_shortcut_messages_queries_.find(shortcut_id);
   CHECK(queries_it != get_shortcut_messages_queries_.end());
@@ -3095,8 +3103,14 @@ void QuickReplyManager::on_reload_quick_reply_messages(
       }
 
       auto *old_shortcut = it != shortcuts_.shortcuts_.end() ? it->get() : nullptr;
+      auto shortcut_name = old_shortcut != nullptr ? old_shortcut->name_ : old_shortcut_name;
+      if (shortcut_name.empty()) {
+        // can't create a shortcut without a name
+        reload_quick_reply_shortcuts();
+        break;
+      }
       auto shortcut = td::make_unique<Shortcut>();
-      shortcut->name_ = old_shortcut->name_;
+      shortcut->name_ = std::move(shortcut_name);
       shortcut->shortcut_id_ = shortcut_id;
       shortcut->server_total_count_ = static_cast<int32>(quick_reply_messages.size());
       shortcut->messages_ = std::move(quick_reply_messages);
@@ -3153,16 +3167,16 @@ int64 QuickReplyManager::get_quick_reply_messages_hash(const Shortcut *s) {
 void QuickReplyManager::reload_quick_reply_message(QuickReplyShortcutId shortcut_id, MessageId message_id,
                                                    Promise<Unit> &&promise) {
   if (td_->auth_manager_->is_bot()) {
-    return promise.set_error(Status::Error(400, "Not supported by bots"));
+    return promise.set_error(400, "Not supported by bots");
   }
 
   load_quick_reply_shortcuts();
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   if (!message_id.is_server()) {
-    return promise.set_error(Status::Error(400, "Message can't be reloaded"));
+    return promise.set_error(400, "Message can't be reloaded");
   }
   auto query_promise =
       PromiseCreator::lambda([actor_id = actor_id(this), shortcut_id, message_id, promise = std::move(promise)](
@@ -3183,7 +3197,7 @@ void QuickReplyManager::on_reload_quick_reply_message(
   }
   auto *s = get_shortcut(shortcut_id);
   if (s == nullptr) {
-    return promise.set_error(Status::Error(400, "Shortcut not found"));
+    return promise.set_error(400, "Shortcut not found");
   }
   auto messages_ptr = r_messages.move_as_ok();
   switch (messages_ptr->get_id()) {
@@ -3191,7 +3205,7 @@ void QuickReplyManager::on_reload_quick_reply_message(
     case telegram_api::messages_channelMessages::ID:
     case telegram_api::messages_messagesNotModified::ID:
       LOG(ERROR) << "Receive " << to_string(messages_ptr);
-      return promise.set_error(Status::Error(400, "Receive wrong response"));
+      return promise.set_error(400, "Receive wrong response");
     case telegram_api::messages_messages::ID: {
       auto messages = telegram_api::move_object_as<telegram_api::messages_messages>(messages_ptr);
       td_->user_manager_->on_get_users(std::move(messages->users_), "on_reload_quick_reply_message");
@@ -3207,11 +3221,11 @@ void QuickReplyManager::on_reload_quick_reply_message(
       }
       if (message == nullptr) {
         delete_quick_reply_messages(s, {message_id}, "on_reload_quick_reply_message");
-        return promise.set_error(Status::Error(400, "Message not found"));
+        return promise.set_error(400, "Message not found");
       }
       if (message->shortcut_id != shortcut_id) {
         LOG(ERROR) << "Receive message from " << message->shortcut_id << " instead of " << shortcut_id;
-        return promise.set_error(Status::Error(400, "Message not found"));
+        return promise.set_error(400, "Message not found");
       }
       on_get_quick_reply_message(s, std::move(message));
       break;
@@ -3420,7 +3434,7 @@ Result<QuickReplyManager::Shortcut *> QuickReplyManager::create_new_local_shortc
 }
 
 MessageId QuickReplyManager::get_input_reply_to_message_id(const Shortcut *s, MessageId reply_to_message_id) {
-  if (s == nullptr || !reply_to_message_id.is_valid() || !reply_to_message_id.is_server()) {
+  if (s == nullptr || !reply_to_message_id.is_server()) {
     return MessageId();
   }
   for (const auto &message : s->messages_) {
@@ -3441,9 +3455,6 @@ Result<InputMessageContent> QuickReplyManager::process_input_message_content(
   if (message_content_id == td_api::inputMessageForwarded::ID) {
     return Status::Error(400, "Can't forward messages to quick replies");
   }
-  if (message_content_id == td_api::inputMessagePoll::ID) {
-    return Status::Error(400, "Can't add poll as a quick reply");
-  }
   if (message_content_id == td_api::inputMessagePaidMedia::ID) {
     return Status::Error(400, "Can't add paid media as a quick reply");
   }
@@ -3451,6 +3462,7 @@ Result<InputMessageContent> QuickReplyManager::process_input_message_content(
       static_cast<const td_api::inputMessageLocation *>(input_message_content.get())->live_period_ != 0) {
     return Status::Error(400, "Can't add live location as a quick reply");
   }
+  // update addQuickReplyShortcutMessage documentation
   return get_input_message_content(DialogId(), std::move(input_message_content), td_, true);
 }
 
@@ -3673,7 +3685,7 @@ void QuickReplyManager::load_quick_reply_shortcuts() {
       register_new_message(message.get(), "load_quick_reply_shortcuts");
 
       if (message->message_id.is_server()) {
-        if (need_reget_message_content(message->content.get()) ||
+        if (need_reget_message_content(td_, message->content.get()) ||
             (message->legacy_layer != 0 && message->legacy_layer < MTPROTO_LAYER)) {
           reload_quick_reply_message(shortcut->shortcut_id_, message->message_id, Promise<Unit>());
         }

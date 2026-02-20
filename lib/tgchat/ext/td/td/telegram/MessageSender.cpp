@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -96,7 +96,7 @@ vector<DialogId> get_message_sender_dialog_ids(Td *td,
       continue;
     }
     if (dialog_id.get_type() == DialogType::User) {
-      if (!td->user_manager_->have_user(dialog_id.get_user_id())) {
+      if (!td->user_manager_->have_min_user(dialog_id.get_user_id())) {
         LOG(ERROR) << "Receive unknown " << dialog_id.get_user_id();
         continue;
       }

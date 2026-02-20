@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -19,6 +19,7 @@ class DisallowedGiftsSettings {
   bool disallow_limited_stargifts_ = false;
   bool disallow_unique_stargifts_ = false;
   bool disallow_premium_gifts_ = false;
+  bool disallow_gifts_from_channels_ = false;
 
   friend bool operator==(const DisallowedGiftsSettings &lhs, const DisallowedGiftsSettings &rhs);
 
@@ -31,13 +32,15 @@ class DisallowedGiftsSettings {
 
   explicit DisallowedGiftsSettings(const td_api::object_ptr<td_api::acceptedGiftTypes> &types);
 
+  static DisallowedGiftsSettings allow_nothing();
+
   td_api::object_ptr<td_api::acceptedGiftTypes> get_accepted_gift_types_object() const;
 
   telegram_api::object_ptr<telegram_api::disallowedGiftsSettings> get_input_disallowed_gifts_settings() const;
 
   bool is_default() const {
     return !disallow_unlimited_stargifts_ && !disallow_limited_stargifts_ && !disallow_unique_stargifts_ &&
-           !disallow_premium_gifts_;
+           !disallow_premium_gifts_ && !disallow_gifts_from_channels_;
   }
 
   template <class StorerT>

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -28,7 +28,7 @@ namespace td {
 
 class NotificationTypeMessage final : public NotificationType {
   bool can_be_delayed() const final {
-    return message_id_.is_valid() && message_id_.is_server();
+    return message_id_.is_server();
   }
 
   bool is_temporary() const final {
@@ -241,7 +241,10 @@ class NotificationTypePushMessage final : public NotificationType {
           return td_api::make_object<td_api::pushMessageContentContact>(arg, is_pinned);
         }
         if (key == "MESSAGE_CONTACT_REGISTERED") {
-          return td_api::make_object<td_api::pushMessageContentContactRegistered>();
+          return td_api::make_object<td_api::pushMessageContentContactRegistered>(false);
+        }
+        if (key == "MESSAGE_CONTACT_REGISTERED_PREMIUM") {
+          return td_api::make_object<td_api::pushMessageContentContactRegistered>(true);
         }
         break;
       case 'D':
@@ -366,13 +369,20 @@ class NotificationTypePushMessage final : public NotificationType {
         }
         if (key == "MESSAGE_STARGIFT") {
           auto star_count = to_integer<int64>(arg);
-          return td_api::make_object<td_api::pushMessageContentGift>(star_count);
+          return td_api::make_object<td_api::pushMessageContentGift>(star_count, false);
+        }
+        if (key == "MESSAGE_STARGIFT_PREPAID_UPGRADE") {
+          auto star_count = to_integer<int64>(arg);
+          return td_api::make_object<td_api::pushMessageContentGift>(star_count, true);
         }
         if (key == "MESSAGE_STARGIFT_TRANSFER") {
-          return td_api::make_object<td_api::pushMessageContentUpgradedGift>(false);
+          return td_api::make_object<td_api::pushMessageContentUpgradedGift>(false, false);
         }
         if (key == "MESSAGE_STARGIFT_UPGRADE") {
-          return td_api::make_object<td_api::pushMessageContentUpgradedGift>(true);
+          return td_api::make_object<td_api::pushMessageContentUpgradedGift>(true, false);
+        }
+        if (key == "MESSAGE_STARGIFT_UNPACK_UPGRADE") {
+          return td_api::make_object<td_api::pushMessageContentUpgradedGift>(false, true);
         }
         if (key == "MESSAGE_STICKER") {
           return td_api::make_object<td_api::pushMessageContentSticker>(
@@ -384,6 +394,9 @@ class NotificationTypePushMessage final : public NotificationType {
         if (key == "MESSAGE_STORY_MENTION") {
           return td_api::make_object<td_api::pushMessageContentStory>(true, is_pinned);
         }
+        if (key == "MESSAGE_SUGGEST_BIRTHDAY") {
+          return td_api::make_object<td_api::pushMessageContentSuggestBirthdate>();
+        }
         if (key == "MESSAGE_SUGGEST_PHOTO") {
           return td_api::make_object<td_api::pushMessageContentSuggestProfilePhoto>();
         }
@@ -391,6 +404,15 @@ class NotificationTypePushMessage final : public NotificationType {
       case 'T':
         if (key == "MESSAGE_TEXT") {
           return td_api::make_object<td_api::pushMessageContentText>(arg, is_pinned);
+        }
+        if (key == "MESSAGE_TODO") {
+          return td_api::make_object<td_api::pushMessageContentChecklist>(arg, is_pinned);
+        }
+        if (key == "MESSAGE_TODO_APPEND") {
+          return td_api::make_object<td_api::pushMessageContentChecklistTasksAdded>(to_integer<int32>(arg));
+        }
+        if (key == "MESSAGE_TODO_DONE") {
+          return td_api::make_object<td_api::pushMessageContentChecklistTasksDone>(to_integer<int32>(arg));
         }
         break;
       case 'V':

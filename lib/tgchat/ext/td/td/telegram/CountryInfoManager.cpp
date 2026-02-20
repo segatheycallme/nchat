@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -203,10 +203,10 @@ void CountryInfoManager::do_get_countries(string language_code, bool is_recursiv
   }
 
   if (is_recursive) {
-    return promise.set_error(Status::Error(500, "Requested data is inaccessible"));
+    return promise.set_error(500, "Requested data is inaccessible");
   }
   if (language_code.empty()) {
-    return promise.set_error(Status::Error(400, "Invalid language code specified"));
+    return promise.set_error(400, "Invalid language code specified");
   }
   load_country_list(language_code, 0,
                     PromiseCreator::lambda([actor_id = actor_id(this), language_code,
@@ -246,10 +246,10 @@ void CountryInfoManager::do_get_phone_number_info(string phone_number_prefix, st
   }
 
   if (is_recursive) {
-    return promise.set_error(Status::Error(500, "Requested data is inaccessible"));
+    return promise.set_error(500, "Requested data is inaccessible");
   }
   if (language_code.empty()) {
-    return promise.set_error(Status::Error(400, "Invalid language code specified"));
+    return promise.set_error(400, "Invalid language code specified");
   }
   load_country_list(language_code, 0,
                     PromiseCreator::lambda([actor_id = actor_id(this), phone_number_prefix, language_code,

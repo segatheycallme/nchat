@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# cvc v0.22
+# cvc v0.27
 #
-# Copyright (c) 2018-2025 Kristofer Berggren
+# Copyright (c) 2018-2026 Kristofer Berggren
 # All rights reserved.
 #
 # cvc is distributed under the MIT license.
@@ -54,6 +54,7 @@
 # For simplified usage one can set up aliases, example:
 # alias ad='cvc add'
 # alias ap='cvc ap'
+# alias bl='cvc bl'
 # alias ci='cvc ci'
 # alias cl='cvc cl'
 # alias co='cvc co'
@@ -108,8 +109,19 @@ git_apply()
   fi
 
   if [[ "${?}" != "0" ]]; then
-    # With issues applying the patch, try to update affected repository files to base version
-    PATCHFILE="${2}"
+
+    # On failed patch apply, prompt user whether to try find and use base commit
+    echo ""
+    read -p "Apply patch failed, try switch to base commit (y/n)? "
+    if [[ "${REPLY}" != "y" ]]; then
+      exit 1
+    fi
+
+    BASECOMMIT="$(head -1 ${PATCHFILE} | grep "^Base-Commit:" | cut -d' ' -f2)"
+    if [[ "${BASECOMMIT}" == "" ]]; then
+      echo "aborting, base commit unknown."
+      exit 1
+    fi
 
     ORIGBRANCH=$(git status | head -1 | awk -F 'On branch ' '{print $2}')
     if [[ "${ORIGBRANCH}" == "" ]]; then
@@ -130,43 +142,9 @@ git_apply()
     fi
     cd "${BASEDIR}" || exit 1
 
-    LASTCOMMIT=""
-    LASTTIME=0
-    while IFS='$\n' read -r LINE; do
-      SRCPATH="$(echo $LINE | cut -d' ' -f3 | cut -c3-)"
-      SRCHASH=$(echo $LINE | awk -F' index ' '{print $2}' | cut -d'.' -f1)
-      if [[ ! -f "${SRCPATH}" ]]; then
-        echo "skipping not found: ${SRCPATH}"
-        continue
-      fi
-
-      if [[ "${SRCHASH}" == "" ]]; then
-        echo "skipping empty hash: ${SRCPATH}"
-        continue
-      fi
-
-      SRCCOMMIT=$(git log -c --date=unix "${SRCPATH}" | grep -B64 "${SRCHASH}" | grep "^commit " | tail -1 | awk '{print $2}' | cut -c1-8)
-      if [[ "${SRCCOMMIT}" == "" ]]; then
-        echo "skipping commit not found: ${SRCPATH}"
-        continue
-      fi
-
-      SRCTIME=$(git log -c --date=unix "${SRCPATH}" | grep -B64 "${SRCHASH}" | grep "^Date: " | tail -1 | awk -F':' '{print $2}' | awk '{$1=$1;print}')
-      echo -n "."
-      if [ "${SRCTIME}" -gt "${LASTTIME}" ]; then
-        LASTTIME=${SRCTIME}
-        LASTCOMMIT="${SRCCOMMIT}"
-      fi
-    done < <(grep -B1 "^index " "${PATCHFILE}" | tr '\n' '\t' | sed -e 's/\tdiff/\ndiff/g' | cat - <(echo "--"))
-
-    if [[ "${LASTCOMMIT}" == "" ]]; then
-      echo "no matching commit found."
-      exit 1
-    fi
-
     WORKBRANCH="cvc-patch-integration"
 
-    git checkout ${LASTCOMMIT} || exit 1
+    git checkout ${BASECOMMIT} || exit 1
     git switch -c ${WORKBRANCH} || exit 1
 
     WORKDIR=$(mktemp -d)
@@ -194,7 +172,31 @@ git_apply()
     exit ${RV}
   fi
 
-  exit 0
+  # Propagate exit status
+  exit ${?}
+}
+
+
+git_blame()
+{
+  # Check arguments
+  if [[ "${2}" == "" ]] || [[ ! -f "${2}" ]]; then
+    echo "usage: cvc bl <FILEPATH>"
+    exit 1
+  fi
+  FILEPATH=$(realpath ${2})
+
+  # Git blame
+  if [ -t 1 ]; then
+    # Interactive / tty
+    git blame "${FILEPATH}" | less
+  else
+    # Non-interactive / piped
+    git blame "${FILEPATH}"
+  fi
+
+  # Propagate exit status
+  exit ${?}
 }
 
 
@@ -301,8 +303,13 @@ git_diff()
   # Git diff
   if [[ "${2}" == "" ]]; then
     BRANCH="$(git branch --show-current)"
+    echo "Base-Commit: $(git rev-parse HEAD)"
+    echo "Base-Branch: ${BRANCH}"
     git --no-pager diff ${BRANCH}
   else
+    BRANCH="$(git branch --show-current)"
+    echo "Base-Commit: $(git rev-parse HEAD)"
+    echo "Base-Branch: ${BRANCH}"
     git --no-pager diff ${@:2}
   fi
 
@@ -496,6 +503,12 @@ git_sync()
           continue
         fi
 
+        DSTPARENT=$(dirname "${DSTPATH}")
+        if [[ ! -d "${DSTPARENT}" ]]; then
+          echo "MkDir: ${DSTPARENT}"
+          mkdir -p "${DSTPARENT}"
+        fi
+
         echo "Copy/Add: ${SRCPATH} -> ${DSTPATH}"
         if [[ "${DRYRUN}" != "1" ]]; then
           cp -a ${SRCPATH} ${DSTPATH}
@@ -641,6 +654,29 @@ svn_apply()
 
   # Propagate exit status
   exit ${RV}
+}
+
+
+svn_blame()
+{
+  # Check arguments
+  if [[ "${2}" == "" ]] || [[ ! -f "${2}" ]]; then
+    echo "usage: cvc bl <FILEPATH>"
+    exit 1
+  fi
+  FILEPATH=$(realpath ${2})
+
+  # Svn blame
+  if [ -t 1 ]; then
+    # Interactive / tty
+    svn blame "${FILEPATH}" | less
+  else
+    # Non-interactive / piped
+    svn blame "${FILEPATH}"
+  fi
+
+  # Propagate exit status
+  exit ${?}
 }
 
 
@@ -794,10 +830,10 @@ svn_listbranches()
 
 svn_log()
 {
-  if [[ "${2}" == "" ]]; then
-    svn log -r1:HEAD
-  else
+  if [[ "${2}" != "" ]] && [[ ${2} == -r* || ${2} == -c* ]]; then
     svn log ${@:2}
+  else
+    svn log -r1:HEAD ${@:2}
   fi
 
   # Propagate exit status
@@ -998,7 +1034,6 @@ TYPE="${CVC_DEFAULT_VC}"
 case "${1}" in
   co)
     ${TYPE}_co "${@}"
-    exit 0
     ;;
 
   gco)
@@ -1007,7 +1042,6 @@ case "${1}" in
 
   in*)
     ${TYPE}_init "${@}"
-    exit 0
     ;;
 
   sco)
@@ -1058,6 +1092,10 @@ case "${1}" in
 
   ap*)
     ${TYPE}_apply "${@}"
+    ;;
+
+  bl*)
+    ${TYPE}_blame "${@}"
     ;;
 
   ci)
@@ -1117,28 +1155,29 @@ case "${1}" in
     ;;
 
   *)
-    echo "usage: cvc ad[d] | ap[ply] | ci | cl[ean] | co | de[l] | dg | di[ff] | in[it]"
-    echo "           lo[g] [-v] | re[vert] | st[atus] | sy[nc] | up[date] | ur[l]"
-    echo "           lb | nb | sb "
+    echo "usage: cvc ad[d] | ap[ply] | bl | ci | cl[ean] | co | de[l] | dg | di[ff]"
+    echo "           in[it] | lo[g] [-v] | re[vert] | st[atus] | sy[nc] | up[date]"
+    echo "           ur[l] | lb | nb | sb "
     echo ""
-    echo "cvc ad      add to version control"
-    echo "cvc ap      apply patch"
-    echo "cvc ci [-m] commit and push"
-    echo "cvc cl      clean up untracked files"
-    echo "cvc co      check out / clone"
-    echo "cvc de      delete"
-    echo "cvc dg      diffgrep grepping added lines"
-    echo "cvc di      diff"
-    echo "cvc in      init local repository"
-    echo "cvc lo [-v] log"
-    echo "cvc re      revert local file change"
-    echo "cvc st      status"
-    echo "cvc sy      sync changes from other repository"
-    echo "cvc up      update"
-    echo "cvc ur      remote clone url"
-    echo "cvc lb      list branches"
-    echo "cvc nb      new branch"
-    echo "cvc sb      switch branch"
+    echo "cvc ad        add to version control"
+    echo "cvc ap        apply patch"
+    echo "cvc bl PATH   blame"
+    echo "cvc ci [-m]   commit and push"
+    echo "cvc cl        clean up untracked files"
+    echo "cvc co        check out / clone"
+    echo "cvc de        delete"
+    echo "cvc dg TEXT   diffgrep grepping added lines"
+    echo "cvc di        diff"
+    echo "cvc in        init local repository"
+    echo "cvc lo [-v]   log"
+    echo "cvc re        revert local file change"
+    echo "cvc st        status"
+    echo "cvc sy        sync changes from other repository"
+    echo "cvc up        update"
+    echo "cvc ur        remote clone url"
+    echo "cvc lb        list branches"
+    echo "cvc nb        new branch"
+    echo "cvc sb        switch branch"
     echo ""
     exit 1
 esac

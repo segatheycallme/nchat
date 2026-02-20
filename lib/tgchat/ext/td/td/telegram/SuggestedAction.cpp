@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,7 +17,6 @@
 #include "td/utils/algorithm.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
-#include "td/utils/Status.h"
 
 #include <algorithm>
 
@@ -54,6 +53,12 @@ SuggestedAction::SuggestedAction(Slice action_str) {
     init(Type::StarsSubscriptionLowBalance);
   } else if (action_str == Slice("USERPIC_SETUP")) {
     init(Type::UserpicSetup);
+  } else if (action_str == Slice("SETUP_LOGIN_EMAIL")) {
+    init(Type::SetupLoginEmail);
+  } else if (action_str == Slice("SETUP_LOGIN_EMAIL_NOSKIP")) {
+    init(Type::SetupLoginEmailNoskip);
+  } else if (action_str == Slice("SETUP_PASSKEY")) {
+    init(Type::SetupPasskey);
   }
 }
 
@@ -144,6 +149,18 @@ SuggestedAction::SuggestedAction(td_api::object_ptr<td_api::SuggestedAction> &&s
       url_ = std::move(action->url_);
       break;
     }
+    case td_api::suggestedActionSetLoginEmailAddress::ID: {
+      auto *action = static_cast<td_api::suggestedActionSetLoginEmailAddress *>(suggested_action.get());
+      if (action->can_be_hidden_) {
+        init(Type::SetupLoginEmail);
+      } else {
+        init(Type::SetupLoginEmailNoskip);
+      }
+      break;
+    }
+    case td_api::suggestedActionAddLoginPasskey::ID:
+      init(Type::SetupPasskey);
+      break;
     default:
       UNREACHABLE();
   }
@@ -181,6 +198,12 @@ string SuggestedAction::get_suggested_action_str() const {
       return "USERPIC_SETUP";
     case Type::Custom:
       return custom_type_;
+    case Type::SetupLoginEmail:
+      return "SETUP_LOGIN_EMAIL";
+    case Type::SetupLoginEmailNoskip:
+      return "SETUP_LOGIN_EMAIL_NOSKIP";
+    case Type::SetupPasskey:
+      return "SETUP_PASSKEY";
     default:
       return string();
   }
@@ -224,6 +247,12 @@ td_api::object_ptr<td_api::SuggestedAction> SuggestedAction::get_suggested_actio
       return td_api::make_object<td_api::suggestedActionCustom>(
           custom_type_, get_formatted_text_object(user_manager, title_, true, -1),
           get_formatted_text_object(user_manager, description_, true, -1), url_);
+    case Type::SetupLoginEmail:
+      return td_api::make_object<td_api::suggestedActionSetLoginEmailAddress>(true);
+    case Type::SetupLoginEmailNoskip:
+      return td_api::make_object<td_api::suggestedActionSetLoginEmailAddress>(false);
+    case Type::SetupPasskey:
+      return td_api::make_object<td_api::suggestedActionAddLoginPasskey>();
     default:
       UNREACHABLE();
       return nullptr;
@@ -283,7 +312,9 @@ bool remove_suggested_action(const UserManager *user_manager, vector<SuggestedAc
 void dismiss_suggested_action(SuggestedAction action, Promise<Unit> &&promise) {
   switch (action.type_) {
     case SuggestedAction::Type::Empty:
-      return promise.set_error(Status::Error(400, "Action must be non-empty"));
+      return promise.set_error(400, "Action must be non-empty");
+    case SuggestedAction::Type::SetupLoginEmailNoskip:
+      return promise.set_error(400, "The action can't be hidden");
     case SuggestedAction::Type::EnableArchiveAndMuteNewChats:
     case SuggestedAction::Type::CheckPassword:
     case SuggestedAction::Type::CheckPhoneNumber:
@@ -298,11 +329,13 @@ void dismiss_suggested_action(SuggestedAction action, Promise<Unit> &&promise) {
     case SuggestedAction::Type::ConvertToGigagroup:
     case SuggestedAction::Type::UserpicSetup:
     case SuggestedAction::Type::Custom:
+    case SuggestedAction::Type::SetupLoginEmail:
+    case SuggestedAction::Type::SetupPasskey:
       return send_closure_later(G()->suggested_action_manager(), &SuggestedActionManager::dismiss_suggested_action,
                                 std::move(action), std::move(promise));
     case SuggestedAction::Type::SetPassword: {
       if (action.otherwise_relogin_days_ < 0) {
-        return promise.set_error(Status::Error(400, "Invalid authorization_delay specified"));
+        return promise.set_error(400, "Invalid authorization_delay specified");
       }
       if (action.otherwise_relogin_days_ == 0) {
         return send_closure_later(G()->suggested_action_manager(), &SuggestedActionManager::dismiss_suggested_action,

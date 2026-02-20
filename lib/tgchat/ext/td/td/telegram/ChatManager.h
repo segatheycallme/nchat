@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,6 +8,7 @@
 
 #include "td/telegram/AccentColorId.h"
 #include "td/telegram/AccessRights.h"
+#include "td/telegram/ActiveStoryState.h"
 #include "td/telegram/BotCommand.h"
 #include "td/telegram/ChannelId.h"
 #include "td/telegram/ChannelType.h"
@@ -17,6 +18,7 @@
 #include "td/telegram/DialogInviteLink.h"
 #include "td/telegram/DialogLocation.h"
 #include "td/telegram/DialogParticipant.h"
+#include "td/telegram/DialogPhoto.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
 #include "td/telegram/MessageFullId.h"
@@ -24,6 +26,7 @@
 #include "td/telegram/MessageTtl.h"
 #include "td/telegram/net/DcId.h"
 #include "td/telegram/Photo.h"
+#include "td/telegram/ProfileTab.h"
 #include "td/telegram/PublicDialogType.h"
 #include "td/telegram/QueryCombiner.h"
 #include "td/telegram/QueryMerger.h"
@@ -42,6 +45,7 @@
 #include "td/utils/FlatHashMap.h"
 #include "td/utils/FlatHashSet.h"
 #include "td/utils/Promise.h"
+#include "td/utils/Slice.h"
 #include "td/utils/Status.h"
 #include "td/utils/StringBuilder.h"
 #include "td/utils/Time.h"
@@ -130,8 +134,9 @@ class ChatManager final : public Actor {
 
   string get_channel_search_text(ChannelId channel_id) const;
 
-  string get_channel_first_username(ChannelId channel_id) const;
-  string get_channel_editable_username(ChannelId channel_id) const;
+  Slice get_channel_first_username(ChannelId channel_id) const;
+
+  Slice get_channel_editable_username(ChannelId channel_id) const;
 
   void on_binlog_chat_event(BinlogEvent &&event);
   void on_binlog_channel_event(BinlogEvent &&event);
@@ -158,7 +163,9 @@ class ChatManager final : public Actor {
   void on_update_channel_participant_count(ChannelId channel_id, int32 participant_count);
   void on_update_channel_editable_username(ChannelId channel_id, string &&username);
   void on_update_channel_usernames(ChannelId channel_id, Usernames &&usernames);
-  void on_update_channel_story_ids(ChannelId channel_id, StoryId max_active_story_id, StoryId max_read_story_id);
+  void on_update_channel_story_ids(ChannelId channel_id,
+                                   telegram_api::object_ptr<telegram_api::recentStory> &&recent_story,
+                                   StoryId max_read_story_id);
   void on_update_channel_max_read_story_id(ChannelId channel_id, StoryId max_read_story_id);
   void on_update_channel_stories_hidden(ChannelId channel_id, bool stories_hidden);
   void on_update_channel_description(ChannelId channel_id, string &&description);
@@ -194,6 +201,8 @@ class ChatManager final : public Actor {
   bool on_get_channel_error(ChannelId channel_id, const Status &status, const char *source);
 
   void on_get_created_public_channels(PublicDialogType type, vector<tl_object_ptr<telegram_api::Chat>> &&chats);
+
+  void load_created_public_broadcasts(Promise<Unit> &&promise);
 
   bool are_created_public_broadcasts_inited() const;
 
@@ -248,6 +257,10 @@ class ChatManager final : public Actor {
   void set_channel_emoji_sticker_set(ChannelId channel_id, StickerSetId sticker_set_id, Promise<Unit> &&promise);
 
   void set_channel_unrestrict_boost_count(ChannelId channel_id, int32 unrestrict_boost_count, Promise<Unit> &&promise);
+
+  void set_channel_main_profile_tab(ChannelId channel_id,
+                                    const td_api::object_ptr<td_api::ProfileTab> &main_profile_tab,
+                                    Promise<Unit> &&promise);
 
   void toggle_channel_sign_messages(ChannelId channel_id, bool sign_messages, bool show_message_sender,
                                     Promise<Unit> &&promise);
@@ -524,6 +537,7 @@ class ChatManager final : public Actor {
     bool stories_hidden = false;
     bool autotranslation = false;
     bool broadcast_messages_allowed = false;
+    bool has_live_story = false;
 
     bool is_megagroup = false;
     bool is_gigagroup = false;
@@ -585,6 +599,8 @@ class ChatManager final : public Actor {
     int32 unrestrict_boost_count = 0;
     int32 gift_count = 0;
 
+    int64 send_paid_message_stars = 0;
+
     DialogInviteLink invite_link;
 
     vector<BotCommands> bot_commands;
@@ -600,6 +616,8 @@ class ChatManager final : public Actor {
     ChannelId monoforum_channel_id;
 
     DialogLocation location;
+
+    ProfileTab main_profile_tab = ProfileTab::Default;
 
     DcId stats_dc_id;
 
@@ -746,7 +764,8 @@ class ChatManager final : public Actor {
   static void on_update_channel_noforwards(Channel *c, ChannelId channel_id, bool noforwards);
   static void on_update_channel_is_forum(Channel *c, ChannelId channel_id, bool is_forum, bool is_forum_tabs);
   void on_update_channel_stories_hidden(Channel *c, ChannelId channel_id, bool stories_hidden);
-  void on_update_channel_story_ids_impl(Channel *c, ChannelId channel_id, StoryId max_active_story_id,
+  void on_update_channel_story_ids_impl(Channel *c, ChannelId channel_id,
+                                        telegram_api::object_ptr<telegram_api::recentStory> &&recent_story,
                                         StoryId max_read_story_id);
   void on_update_channel_max_read_story_id(Channel *c, ChannelId channel_id, StoryId max_read_story_id);
   void on_update_channel_bot_verification_icon(Channel *c, ChannelId channel_id, CustomEmojiId bot_verification_icon);
@@ -765,6 +784,8 @@ class ChatManager final : public Actor {
                                                               int32 slow_mode_next_send_date);
   static void on_update_channel_full_bot_user_ids(ChannelFull *channel_full, ChannelId channel_id,
                                                   vector<UserId> &&bot_user_ids);
+
+  void on_set_channel_main_profile_tab(ChannelId channel_id, ProfileTab main_profile_tab, Promise<Unit> &&promise);
 
   void on_channel_status_changed(Channel *c, ChannelId channel_id, const DialogParticipantStatus &old_status,
                                  const DialogParticipantStatus &new_status);
@@ -866,7 +887,7 @@ class ChatManager final : public Actor {
 
   bool need_poll_channel_active_stories(const Channel *c, ChannelId channel_id) const;
 
-  static bool get_channel_has_unread_stories(const Channel *c);
+  static ActiveStoryState get_channel_active_story_state(const Channel *c);
 
   td_api::object_ptr<td_api::updateSupergroup> get_update_supergroup_object(ChannelId channel_id,
                                                                             const Channel *c) const;

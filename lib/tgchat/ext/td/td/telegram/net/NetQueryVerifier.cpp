@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -87,7 +87,7 @@ void NetQueryVerifier::check_recaptcha(NetQueryPtr query, string action, string 
 void NetQueryVerifier::set_verification_token(int64 query_id, string &&token, Promise<Unit> &&promise) {
   auto it = queries_.find(query_id);
   if (it == queries_.end()) {
-    return promise.set_error(Status::Error(400, "Verification not found"));
+    return promise.set_error(400, "Verification not found");
   }
   auto query = std::move(it->second.first);
   auto verification_query = std::move(it->second.second);

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -136,7 +136,7 @@ GetHostByNameActor::GetHostByNameActor(Options options) : options_(std::move(opt
 void GetHostByNameActor::run(string host, int port, bool prefer_ipv6, Promise<IPAddress> promise) {
   TRY_RESULT_PROMISE(promise, ascii_host, idn_to_ascii(host));
   if (ascii_host.empty()) {
-    return promise.set_error(Status::Error("Host is empty"));
+    return promise.set_error("Host is empty");
   }
 
   auto begin_time = Time::now();

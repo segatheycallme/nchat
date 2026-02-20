@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -12,6 +12,7 @@
 #include "td/telegram/ChatManager.h"
 #include "td/telegram/Dependencies.h"
 #include "td/telegram/DialogManager.h"
+#include "td/telegram/DialogPhoto.h"
 #include "td/telegram/Dimensions.h"
 #include "td/telegram/Document.h"
 #include "td/telegram/Document.hpp"
@@ -29,6 +30,8 @@
 #include "td/telegram/PhotoFormat.h"
 #include "td/telegram/QuickReplyManager.h"
 #include "td/telegram/StarGift.h"
+#include "td/telegram/StarGiftBackground.h"
+#include "td/telegram/StarGiftBackground.hpp"
 #include "td/telegram/StickerFormat.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/StickersManager.hpp"
@@ -77,17 +80,16 @@ class GetWebPagePreviewQuery final : public Td::ResultHandler {
       : promise_(std::move(promise)) {
   }
 
-  void send(const string &text, vector<tl_object_ptr<telegram_api::MessageEntity>> &&entities,
-            unique_ptr<WebPagesManager::GetWebPagePreviewOptions> &&options) {
+  void send(const FormattedText &text, unique_ptr<WebPagesManager::GetWebPagePreviewOptions> &&options) {
     options_ = std::move(options);
 
     int32 flags = 0;
+    auto entities = get_input_message_entities(td_->user_manager_.get(), text.entities, "GetWebPagePreviewQuery");
     if (!entities.empty()) {
       flags |= telegram_api::messages_getWebPagePreview::ENTITIES_MASK;
     }
-
-    send_query(
-        G()->net_query_creator().create(telegram_api::messages_getWebPagePreview(flags, text, std::move(entities))));
+    send_query(G()->net_query_creator().create(
+        telegram_api::messages_getWebPagePreview(flags, text.text, std::move(entities))));
   }
 
   void on_result(BufferSlice packet) final {
@@ -99,6 +101,8 @@ class GetWebPagePreviewQuery final : public Td::ResultHandler {
     auto ptr = result_ptr.move_as_ok();
     LOG(INFO) << "Receive result for GetWebPagePreviewQuery: " << to_string(ptr);
     td_->user_manager_->on_get_users(std::move(ptr->users_), "GetWebPagePreviewQuery");
+    td_->chat_manager_->on_get_chats(std::move(ptr->chats_), "GetWebPagePreviewQuery");
+
     td_->web_pages_manager_->on_get_web_page_preview(std::move(options_), std::move(ptr->media_), std::move(promise_));
   }
 
@@ -251,6 +255,7 @@ class WebPagesManager::WebPage {
   bool video_cover_photo_ = false;
   mutable bool is_album_ = false;
   mutable bool is_album_checked_ = false;
+  mutable bool was_reloaded_ = false;
   Document document_;
   vector<Document> documents_;
   ThemeSettings theme_settings_;
@@ -258,6 +263,8 @@ class WebPagesManager::WebPage {
   vector<FileId> sticker_ids_;
   vector<StarGift> star_gifts_;
   WebPageInstantView instant_view_;
+  int32 auction_end_date_ = 0;
+  unique_ptr<StarGiftBackground> gift_background_;
 
   FileSourceId file_source_id_;
 
@@ -284,6 +291,8 @@ class WebPagesManager::WebPage {
     bool has_sticker_ids = !sticker_ids_.empty();
     bool has_theme_settings = !theme_settings_.is_empty();
     bool has_star_gifts = !star_gifts_.empty();
+    bool has_auction_end_date = auction_end_date_ != 0;
+    bool has_gift_background = gift_background_ != nullptr;
     BEGIN_STORE_FLAGS();
     STORE_FLAG(has_type);
     STORE_FLAG(has_site_name);
@@ -305,6 +314,8 @@ class WebPagesManager::WebPage {
     STORE_FLAG(has_theme_settings);
     STORE_FLAG(has_star_gifts);
     STORE_FLAG(video_cover_photo_);
+    STORE_FLAG(has_auction_end_date);
+    STORE_FLAG(has_gift_background);
     END_STORE_FLAGS();
 
     store(url_, storer);
@@ -359,6 +370,12 @@ class WebPagesManager::WebPage {
     if (has_star_gifts) {
       store(star_gifts_, storer);
     }
+    if (has_auction_end_date) {
+      store(auction_end_date_, storer);
+    }
+    if (has_gift_background) {
+      store(gift_background_, storer);
+    }
   }
 
   template <class ParserT>
@@ -382,6 +399,8 @@ class WebPagesManager::WebPage {
     bool has_sticker_ids;
     bool has_theme_settings;
     bool has_star_gifts;
+    bool has_auction_end_date;
+    bool has_gift_background;
     BEGIN_PARSE_FLAGS();
     PARSE_FLAG(has_type);
     PARSE_FLAG(has_site_name);
@@ -403,6 +422,8 @@ class WebPagesManager::WebPage {
     PARSE_FLAG(has_theme_settings);
     PARSE_FLAG(has_star_gifts);
     PARSE_FLAG(video_cover_photo_);
+    PARSE_FLAG(has_auction_end_date);
+    PARSE_FLAG(has_gift_background);
     END_PARSE_FLAGS();
 
     parse(url_, parser);
@@ -466,6 +487,12 @@ class WebPagesManager::WebPage {
     if (has_star_gifts) {
       parse(star_gifts_, parser);
     }
+    if (has_auction_end_date) {
+      parse(auction_end_date_, parser);
+    }
+    if (has_gift_background) {
+      parse(gift_background_, parser);
+    }
 
     if (has_instant_view) {
       instant_view_.is_empty_ = false;
@@ -485,6 +512,7 @@ class WebPagesManager::WebPage {
            lhs.document_ == rhs.document_ && lhs.documents_ == rhs.documents_ &&
            lhs.theme_settings_ == rhs.theme_settings_ && lhs.story_full_ids_ == rhs.story_full_ids_ &&
            lhs.sticker_ids_ == rhs.sticker_ids_ && lhs.star_gifts_ == rhs.star_gifts_ &&
+           lhs.auction_end_date_ == rhs.auction_end_date_ && lhs.gift_background_ == rhs.gift_background_ &&
            lhs.instant_view_.is_empty_ == rhs.instant_view_.is_empty_ &&
            lhs.instant_view_.is_v2_ == rhs.instant_view_.is_v2_;
   }
@@ -592,6 +620,7 @@ WebPageId WebPagesManager::on_get_web_page(tl_object_ptr<telegram_api::WebPage> 
       LOG(INFO) << "Receive " << web_page_id;
       auto page = make_unique<WebPage>();
 
+      page->was_reloaded_ = true;
       page->url_ = std::move(web_page->url_);
       page->display_url_ = std::move(web_page->display_url_);
       page->type_ = std::move(web_page->type_);
@@ -656,7 +685,7 @@ WebPageId WebPagesManager::on_get_web_page(tl_object_ptr<telegram_api::WebPage> 
             }
             td_->dialog_manager_->force_create_dialog(dialog_id, "webPageAttributeStory");
             page->story_full_ids_.push_back(story_full_id);
-            if (page->type_ != "telegram_story") {
+            if (page->type_ != "telegram_story" && page->type_ != "telegram_story_live") {
               LOG(ERROR) << "Receive webPageAttributeStory for " << page->type_;
             }
             break;
@@ -690,6 +719,39 @@ WebPageId WebPagesManager::on_get_web_page(tl_object_ptr<telegram_api::WebPage> 
             page->star_gifts_.push_back(std::move(star_gift));
             if (page->type_ != "telegram_nft") {
               LOG(ERROR) << "Receive webPageAttributeUniqueStarGift for " << page->type_;
+            }
+            break;
+          }
+          case telegram_api::webPageAttributeStarGiftCollection::ID: {
+            auto attribute =
+                telegram_api::move_object_as<telegram_api::webPageAttributeStarGiftCollection>(attribute_ptr);
+            for (auto &icon : attribute->icons_) {
+              auto icon_file_id = td_->stickers_manager_
+                                      ->on_get_sticker_document(std::move(icon), StickerFormat::Unknown,
+                                                                "webPageAttributeStarGiftCollection")
+                                      .second;
+              if (!icon_file_id.is_valid()) {
+                LOG(ERROR) << "Receive invalid gift collection icon";
+              } else if (page->sticker_ids_.size() < 4) {
+                page->sticker_ids_.push_back(icon_file_id);
+              }
+            }
+            if (page->type_ != "telegram_collection") {
+              LOG(ERROR) << "Receive webPageAttributeStarGiftCollection for " << page->type_;
+            }
+            break;
+          }
+          case telegram_api::webPageAttributeStarGiftAuction::ID: {
+            auto attribute = telegram_api::move_object_as<telegram_api::webPageAttributeStarGiftAuction>(attribute_ptr);
+            auto star_gift = StarGift(td_, std::move(attribute->gift_), false);
+            if (!star_gift.is_valid()) {
+              LOG(ERROR) << "Receive no gift in webPageAttributeStarGiftAuction";
+              break;
+            }
+            page->star_gifts_.push_back(std::move(star_gift));
+            page->auction_end_date_ = attribute->end_date_;
+            if (page->type_ != "telegram_auction") {
+              LOG(ERROR) << "Receive webPageAttributeStarGiftAuction for " << page->type_;
             }
             break;
           }
@@ -989,7 +1051,7 @@ void WebPagesManager::on_get_web_page_preview(unique_ptr<GetWebPagePreviewOption
     }
 
     LOG(ERROR) << "Receive " << to_string(message_media_ptr) << " instead of web page";
-    return promise.set_error(Status::Error(500, "Receive not web page in GetWebPagePreview"));
+    return promise.set_error(500, "Receive not web page in GetWebPagePreview");
   }
 
   auto message_media_web_page = move_tl_object_as<telegram_api::messageMediaWebPage>(message_media_ptr);
@@ -1055,10 +1117,7 @@ void WebPagesManager::get_web_page_preview(td_api::object_ptr<td_api::formattedT
   options->first_url_ = std::move(url);
   options->skip_confirmation_ = skip_confirmation;
   options->link_preview_options_ = std::move(link_preview_options);
-  td_->create_handler<GetWebPagePreviewQuery>(std::move(promise))
-      ->send(formatted_text.text,
-             get_input_message_entities(td_->user_manager_.get(), formatted_text.entities, "get_web_page_preview"),
-             std::move(options));
+  td_->create_handler<GetWebPagePreviewQuery>(std::move(promise))->send(formatted_text, std::move(options));
 }
 
 void WebPagesManager::get_web_page_instant_view(const string &url, bool only_local, Promise<WebPageId> &&promise) {
@@ -1471,13 +1530,25 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
   return td_api::make_object<td_api::linkPreviewTypeUnsupported>();
 }
 
-td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_type_object(
-    const WebPage *web_page) const {
+td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_type_object(const WebPage *web_page,
+                                                                                          bool &need_reload) const {
+  need_reload = false;
   if (is_web_page_album(web_page)) {
     return get_link_preview_type_album_object(web_page->instant_view_);
   }
   if (begins_with(web_page->type_, "telegram_")) {
     Slice type = Slice(web_page->type_).substr(9);
+    if (type == "auction") {
+      if (web_page->star_gifts_.size() == 1) {
+        return td_api::make_object<td_api::linkPreviewTypeGiftAuction>(
+            web_page->star_gifts_[0].get_gift_object(td_, web_page->gift_background_.get()),
+            web_page->auction_end_date_);
+      } else {
+        LOG(ERROR) << "Receive gift auction " << web_page->url_ << " without the gift";
+        need_reload = true;
+        return td_api::make_object<td_api::linkPreviewTypeUnsupported>();
+      }
+    }
     if (type == "background") {
       LOG_IF(ERROR, !web_page->photo_.is_empty()) << "Receive photo for " << web_page->url_;
       LOG_IF(ERROR,
@@ -1525,6 +1596,12 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
       return td_api::make_object<td_api::linkPreviewTypeChannelBoost>(
           get_chat_photo_object(td_->file_manager_.get(), web_page->photo_));
     }
+    if (type == "channel_direct") {
+      LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
+          << "Receive wrong document for " << web_page->url_;
+      return td_api::make_object<td_api::linkPreviewTypeDirectMessagesChat>(
+          get_chat_photo_object(td_->file_manager_.get(), web_page->photo_));
+    }
     if (type == "chat" || type == "chat_request") {
       LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
           << "Receive wrong document for " << web_page->url_;
@@ -1537,6 +1614,12 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
       LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
           << "Receive wrong document for " << web_page->url_;
       return td_api::make_object<td_api::linkPreviewTypeShareableChatFolder>();
+    }
+    if (type == "collection") {
+      LOG_IF(ERROR, !web_page->photo_.is_empty()) << "Receive photo for " << web_page->url_;
+      auto icons = transform(web_page->sticker_ids_,
+                             [&](FileId sticker_id) { return td_->stickers_manager_->get_sticker_object(sticker_id); });
+      return td_api::make_object<td_api::linkPreviewTypeGiftCollection>(std::move(icons));
     }
     if (type == "giftcode") {
       LOG_IF(ERROR, !web_page->photo_.is_empty()) << "Receive photo for " << web_page->url_;
@@ -1560,7 +1643,8 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
       LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
           << "Receive wrong document for " << web_page->url_;
       return td_api::make_object<td_api::linkPreviewTypeVideoChat>(
-          get_chat_photo_object(td_->file_manager_.get(), web_page->photo_), true);
+          get_chat_photo_object(td_->file_manager_.get(), web_page->photo_), true,
+          LinkManager::has_video_chat_invite_hash(web_page->url_));
     }
     if (type == "megagroup" || type == "megagroup_request") {
       LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
@@ -1581,6 +1665,7 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
             web_page->star_gifts_[0].get_upgraded_gift_object(td_));
       } else {
         LOG(ERROR) << "Receive upgraded gift " << web_page->url_ << " without the gift";
+        need_reload = true;
         return td_api::make_object<td_api::linkPreviewTypeUnsupported>();
       }
     }
@@ -1591,18 +1676,33 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
       });
       return td_api::make_object<td_api::linkPreviewTypeStickerSet>(std::move(stickers));
     }
-    if (type == "story") {
+    if (type == "story" || type == "story_live") {
+      LOG_IF(ERROR, !web_page->photo_.is_empty()) << "Receive photo for " << web_page->url_;
+      LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
+          << "Receive wrong document for " << web_page->url_;
       DialogId story_sender_dialog_id;
       StoryId story_id;
       if (web_page->story_full_ids_.size() == 1) {
         story_sender_dialog_id = web_page->story_full_ids_[0].get_dialog_id();
         story_id = web_page->story_full_ids_[0].get_story_id();
+        if (type == "story_live") {
+          return td_api::make_object<td_api::linkPreviewTypeLiveStory>(
+              td_->dialog_manager_->get_chat_id_object(story_sender_dialog_id, "webPage"), story_id.get());
+        }
         return td_api::make_object<td_api::linkPreviewTypeStory>(
             td_->dialog_manager_->get_chat_id_object(story_sender_dialog_id, "webPage"), story_id.get());
       } else {
         LOG(ERROR) << "Receive Telegram story " << web_page->url_ << " without story";
+        need_reload = true;
         return td_api::make_object<td_api::linkPreviewTypeUnsupported>();
       }
+    }
+    if (type == "story_album") {
+      auto video = web_page->document_.type == Document::Type::Video
+                       ? td_->videos_manager_->get_video_object(web_page->document_.file_id)
+                       : nullptr;
+      return td_api::make_object<td_api::linkPreviewTypeStoryAlbum>(
+          get_photo_object(td_->file_manager_.get(), web_page->photo_), std::move(video));
     }
     if (type == "theme") {
       LOG_IF(ERROR, !web_page->photo_.is_empty()) << "Receive photo for " << web_page->url_;
@@ -1626,7 +1726,8 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
       LOG_IF(ERROR, web_page->document_.type != Document::Type::Unknown)
           << "Receive wrong document for " << web_page->url_;
       return td_api::make_object<td_api::linkPreviewTypeVideoChat>(
-          get_chat_photo_object(td_->file_manager_.get(), web_page->photo_), false);
+          get_chat_photo_object(td_->file_manager_.get(), web_page->photo_), false,
+          LinkManager::has_video_chat_invite_hash(web_page->url_));
     }
   }
   if (!web_page->embed_type_.empty() || !web_page->embed_url_.empty()) {
@@ -1759,6 +1860,9 @@ td_api::object_ptr<td_api::LinkPreviewType> WebPagesManager::get_link_preview_ty
     auto photo = get_photo_object(td_->file_manager_.get(), web_page->photo_);
     if (photo != nullptr) {
       return td_api::make_object<td_api::linkPreviewTypePhoto>(std::move(photo));
+    } else if (web_page->site_name_ == "Telegram") {
+      // unavailable photo
+      return td_api::make_object<td_api::linkPreviewTypeArticle>(nullptr);
     } else {
       LOG(ERROR) << "Receive photo without photo for " << web_page->url_;
       return td_api::make_object<td_api::linkPreviewTypeUnsupported>();
@@ -1936,7 +2040,12 @@ td_api::object_ptr<td_api::linkPreview> WebPagesManager::get_link_preview_object
     }
     return false;
   }();
-  auto link_preview_type = get_link_preview_type_object(web_page);
+  bool need_reload = false;
+  auto link_preview_type = get_link_preview_type_object(web_page, need_reload);
+  if (need_reload && !web_page->was_reloaded_) {
+    web_page->was_reloaded_ = true;
+    td_->create_handler<GetWebPageQuery>(Promise<WebPageId>())->send(WebPageId(), web_page->url_, 0);
+  }
   bool show_media_above_description = false;
   if (show_large_media) {
     auto type_id = link_preview_type->get_id();
@@ -2129,7 +2238,7 @@ void WebPagesManager::on_pending_web_page_timeout(WebPageId web_page_id) {
       auto requests = std::move(it->second);
       pending_get_web_pages_.erase(it);
       for (auto &request : requests) {
-        request.second.set_error(Status::Error(500, "Request timeout exceeded"));
+        request.second.set_error(500, "Request timeout exceeded");
         count++;
       }
     }

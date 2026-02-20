@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -193,6 +193,9 @@ bool TD_TL_writer_h::need_arg_mask(const tl::arg &a, bool can_be_stored) const {
     return false;
   }
   if (can_be_stored) {
+    return true;
+  }
+  if (a.name == "albums") {
     return true;
   }
   if (!is_built_in_simple_type(name)) {

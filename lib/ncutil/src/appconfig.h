@@ -12,11 +12,18 @@
 
 #include "config.h"
 
-enum AttachmentPrefetch
+enum AttachmentPrefetchType
 {
   AttachmentPrefetchNone = 0,
   AttachmentPrefetchSelected = 1,
   AttachmentPrefetchAll = 2,
+};
+
+enum MessageDeleteType
+{
+  MessageDeleteErase = 1,
+  MessageDeleteReplace = 2,
+  MessageDeletePrefix = 3,
 };
 
 class AppConfig
@@ -29,6 +36,7 @@ public:
   static int GetNum(const std::string& p_Param);
   static void SetNum(const std::string& p_Param, const int& p_Value);
   static std::string GetStr(const std::string& p_Param);
+  static void SetStr(const std::string& p_Param, const std::string& p_Value);
 
 private:
   static std::shared_ptr<Config> m_Config;

@@ -22,7 +22,16 @@ set(TL_MTPROTO_AUTO_SOURCE
 )
 
 set(TL_TD_AUTO_SOURCE
-  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_0.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_1.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_2.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_3.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_4.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_5.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_6.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_7.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_8.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api_9.cpp
   ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api.h
   ${TD_AUTO_INCLUDE_DIR}/telegram/telegram_api.hpp
   ${TD_AUTO_INCLUDE_DIR}/telegram/secret_api.cpp
@@ -39,14 +48,32 @@ set(TL_E2E_AUTO_SOURCE
 )
 
 set(TL_TD_API_AUTO_SOURCE
-  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_0.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_1.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_2.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_3.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_4.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_5.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_6.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_7.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_8.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_9.cpp
   ${TD_AUTO_INCLUDE_DIR}/telegram/td_api.h
   ${TD_AUTO_INCLUDE_DIR}/telegram/td_api.hpp
   PARENT_SCOPE
 )
 
 set(TL_TD_JSON_AUTO_SOURCE
-  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_0.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_1.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_2.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_3.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_4.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_5.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_6.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_7.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_8.cpp
+  ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json_9.cpp
   ${TD_AUTO_INCLUDE_DIR}/telegram/td_api_json.h
   PARENT_SCOPE
 )
@@ -208,7 +235,7 @@ if (NOT CMAKE_CROSSCOMPILING)
 
   if (TD_ENABLE_DOTNET)
     if (PHP_EXECUTABLE)
-      set(GENERATE_DOTNET_API_CMD td_generate_dotnet_api ${TD_API_TLO_FILE} && ${PHP_EXECUTABLE} ../DotnetTlDocumentationGenerator.php ../scheme/td_api.tl td/telegram/TdDotNetApi.h)
+      set(GENERATE_DOTNET_API_CMD td_generate_dotnet_api ${TD_API_TLO_FILE} && ${PHP_EXECUTABLE} ../DotnetTlDocumentationGenerator.php ../scheme/td_api.tl td/telegram/Telegram.Td.xml ${TD_ENABLE_DOTNET})
     else()
       set(GENERATE_DOTNET_API_CMD td_generate_dotnet_api ${TD_API_TLO_FILE})
     endif()
@@ -222,7 +249,4 @@ if (NOT CMAKE_CROSSCOMPILING)
       DEPENDS td_generate_dotnet_api tl_generate_tlo ${TD_API_TLO_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/scheme/td_api.tl ${CMAKE_CURRENT_SOURCE_DIR}/DotnetTlDocumentationGenerator.php
     )
   endif()
-
-  add_executable(remove_documentation remove_documentation.cpp)
-  target_link_libraries(remove_documentation PRIVATE tdtl)
 endif()

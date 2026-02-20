@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -20,7 +20,7 @@ class Birthdate {
 
   explicit Birthdate(telegram_api::object_ptr<telegram_api::birthday> birthday);
 
-  explicit Birthdate(td_api::object_ptr<td_api::birthdate> birthdate);
+  explicit Birthdate(const td_api::object_ptr<td_api::birthdate> &birthdate);
 
   td_api::object_ptr<td_api::birthdate> get_birthdate_object() const;
 

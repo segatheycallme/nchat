@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -64,6 +64,9 @@ class BackgroundFill {
   static Result<BackgroundFill> get_background_fill(Slice name);
 
   bool is_dark() const;
+
+ public:
+  static td_api::object_ptr<td_api::BackgroundFill> get_background_fill_object(const vector<int32> &colors);
 };
 
 bool operator==(const BackgroundFill &lhs, const BackgroundFill &rhs);

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -11,7 +11,6 @@
 #include "td/telegram/ServerMessageId.h"
 
 #include "td/utils/common.h"
-#include "td/utils/HashTableUtils.h"
 #include "td/utils/StringBuilder.h"
 
 #include <limits>
@@ -68,12 +67,6 @@ class DialogDate {
 const DialogDate MIN_DIALOG_DATE(std::numeric_limits<int64>::max(), DialogId());
 const DialogDate MAX_DIALOG_DATE(0, DialogId());
 const int64 DEFAULT_ORDER = -1;
-
-struct DialogDateHash {
-  uint32 operator()(const DialogDate &dialog_date) const {
-    return combine_hashes(Hash<int64>()(dialog_date.get_order()), DialogIdHash()(dialog_date.get_dialog_id()));
-  }
-};
 
 inline StringBuilder &operator<<(StringBuilder &string_builder, DialogDate dialog_date) {
   return string_builder << "[" << dialog_date.get_order() << ", " << dialog_date.get_dialog_id().get() << "]";

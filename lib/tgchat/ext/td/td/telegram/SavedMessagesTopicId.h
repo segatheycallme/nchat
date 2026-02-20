@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -55,6 +55,8 @@ class SavedMessagesTopicId {
   td_api::object_ptr<td_api::SavedMessagesTopicType> get_saved_messages_topic_type_object(const Td *td) const;
 
   td_api::object_ptr<td_api::MessageSender> get_monoforum_message_sender_object(Td *td) const;
+
+  Result<telegram_api::object_ptr<telegram_api::InputUser>> get_input_user(const Td *td) const;
 
   telegram_api::object_ptr<telegram_api::InputPeer> get_input_peer(const Td *td) const;
 

@@ -1,10 +1,12 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/telegram/BackgroundType.h"
+
+#include "td/telegram/misc.h"
 
 #include "td/utils/base64.h"
 #include "td/utils/HttpUrl.h"
@@ -21,10 +23,6 @@ static string get_color_hex_string(int32 color) {
     result += "0123456789abcdef"[(color >> i) & 0xF];
   }
   return result;
-}
-
-static bool is_valid_color(int32 color) {
-  return 0 <= color && color <= 0xFFFFFF;
 }
 
 static bool validate_alpha_color(int32 &color) {
@@ -450,6 +448,19 @@ td_api::object_ptr<td_api::BackgroundFill> BackgroundFill::get_background_fill_o
       UNREACHABLE();
       return nullptr;
   }
+}
+
+td_api::object_ptr<td_api::BackgroundFill> BackgroundFill::get_background_fill_object(const vector<int32> &colors) {
+  if (colors.size() >= 3) {
+    return td_api::make_object<td_api::backgroundFillFreeformGradient>(vector<int32>(colors));
+  }
+  if (colors.empty()) {
+    return nullptr;
+  }
+  if (colors.size() == 1 || colors[0] == colors[1]) {
+    return td_api::make_object<td_api::backgroundFillSolid>(colors[0]);
+  }
+  return td_api::make_object<td_api::backgroundFillGradient>(colors[1], colors[0], 0);
 }
 
 td_api::object_ptr<td_api::BackgroundType> BackgroundType::get_background_type_object() const {

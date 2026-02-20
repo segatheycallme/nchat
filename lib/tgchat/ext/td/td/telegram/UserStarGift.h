@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,6 +9,7 @@
 #include "td/telegram/DialogId.h"
 #include "td/telegram/MessageEntity.h"
 #include "td/telegram/StarGift.h"
+#include "td/telegram/StarGiftCollectionId.h"
 #include "td/telegram/StarGiftId.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/telegram_api.h"
@@ -24,19 +25,24 @@ class UserStarGift {
   StarGift gift_;
   FormattedText message_;
   StarGiftId star_gift_id_;
+  vector<StarGiftCollectionId> collection_ids_;
+  string prepaid_upgrade_hash_;
   int64 convert_star_count_ = 0;
   int64 upgrade_star_count_ = 0;
   int64 transfer_star_count_ = 0;
+  int64 drop_original_details_star_count_ = 0;
   int32 date_ = 0;
   int32 can_transfer_at_ = 0;
   int32 can_resell_at_ = 0;
   int32 can_export_at_ = 0;
+  int32 gift_num_ = 0;
   bool is_name_hidden_ = false;
   bool is_saved_ = false;
   bool is_pinned_ = false;
   bool can_upgrade_ = false;
   bool can_transfer_ = false;
   bool was_refunded_ = false;
+  bool is_upgrade_separate_ = false;
 
  public:
   UserStarGift(Td *td, telegram_api::object_ptr<telegram_api::savedStarGift> &&gift, DialogId dialog_id);

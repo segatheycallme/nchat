@@ -43,6 +43,17 @@ void UiHelpView::Draw()
     return helpItems;
   }();
 
+  static std::vector<std::wstring> fileListDialogHelpItems = []()
+  {
+    std::vector<std::wstring> helpItems;
+    AppendHelpItem("ok", "Select", helpItems);
+    AppendHelpItem("cancel", "Cancel", helpItems);
+    AppendHelpItem("abc", "AddFiltr", helpItems);
+    AppendHelpItem("backspace", "DelFiltr", helpItems);
+    AppendHelpItem("left", "Parent", helpItems);
+    return helpItems;
+  }();
+
   static std::vector<std::wstring> messageDialogHelpItems = []()
   {
     std::vector<std::wstring> helpItems;
@@ -83,6 +94,7 @@ void UiHelpView::Draw()
     AppendHelpItem("find_next", "FindNext", helpItems);
     AppendHelpItem("select_contact", "AddrBook", helpItems);
     AppendHelpItem("spell", "ExtSpell", helpItems);
+    AppendHelpItem("auto_compose", "AutoComp", helpItems);
     AppendHelpItem("decrease_list_width", "DecListW", helpItems);
     AppendHelpItem("increase_list_width", "IncListW", helpItems);
 
@@ -134,6 +146,7 @@ void UiHelpView::Draw()
   }();
 
   static std::vector<std::wstring> listDialogHelpViews;
+  static std::vector<std::wstring> fileListDialogHelpViews;
   static std::vector<std::wstring> messageDialogHelpViews;
   static std::vector<std::wstring> editMessageHelpViews;
   static std::vector<std::wstring> selectHelpViews;
@@ -146,6 +159,7 @@ void UiHelpView::Draw()
 
     const int maxW = m_W - 2;
     listDialogHelpViews = GetHelpViews(maxW, listDialogHelpItems, otherHelpItem);
+    fileListDialogHelpViews = GetHelpViews(maxW, fileListDialogHelpItems, otherHelpItem);
     messageDialogHelpViews = GetHelpViews(maxW, messageDialogHelpItems, otherHelpItem);
     editMessageHelpViews = GetHelpViews(maxW, editMessageHelpItems, otherHelpItem);
     selectHelpViews = GetHelpViews(maxW, mainSelectHelpItems, otherHelpItem);
@@ -160,7 +174,11 @@ void UiHelpView::Draw()
   wattron(m_Win, attribute | colorPair);
 
   std::wstring wstr;
-  if (m_Model->GetListDialogActiveLocked())
+  if (m_Model->GetFileListDialogActiveLocked())
+  {
+    wstr = fileListDialogHelpViews.at(m_Model->GetHelpOffsetLocked() % fileListDialogHelpViews.size());
+  }
+  else if (m_Model->GetListDialogActiveLocked())
   {
     wstr = listDialogHelpViews.at(m_Model->GetHelpOffsetLocked() % listDialogHelpViews.size());
   }

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -14,13 +14,13 @@
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogLocation.h"
 #include "td/telegram/DialogParticipant.h"
+#include "td/telegram/DialogPhoto.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileUploadId.h"
 #include "td/telegram/FolderId.h"
 #include "td/telegram/InputDialogId.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/NotificationSettingsScope.h"
-#include "td/telegram/Photo.h"
 #include "td/telegram/RecentDialogList.h"
 #include "td/telegram/SavedMessagesTopicId.h"
 #include "td/telegram/td_api.h"
@@ -83,6 +83,8 @@ class DialogManager final : public Actor {
   Status check_dialog_access_in_memory(DialogId dialog_id, bool allow_secret_chats, AccessRights access_rights) const;
 
   bool have_input_peer(DialogId dialog_id, bool allow_secret_chats, AccessRights access_rights) const;
+
+  Status can_send_message_to_dialog(DialogId dialog_id) const;
 
   bool have_dialog_force(DialogId dialog_id, const char *source) const;
 
@@ -151,6 +153,8 @@ class DialogManager final : public Actor {
 
   bool is_broadcast_channel(DialogId dialog_id) const;
 
+  bool can_dialog_have_threads(DialogId dialog_id) const;
+
   bool on_get_dialog_error(DialogId dialog_id, const Status &status, const char *source);
 
   void delete_dialog(DialogId dialog_id, Promise<Unit> &&promise);
@@ -162,6 +166,8 @@ class DialogManager final : public Actor {
   int32 get_dialog_accent_color_id_object(DialogId dialog_id) const;
 
   CustomEmojiId get_dialog_background_custom_emoji_id(DialogId dialog_id) const;
+
+  td_api::object_ptr<td_api::upgradedGiftColors> get_dialog_upgraded_gift_colors_object(DialogId dialog_id) const;
 
   int32 get_dialog_profile_accent_color_id_object(DialogId dialog_id) const;
 
@@ -210,6 +216,8 @@ class DialogManager final : public Actor {
                      const string &text, Promise<td_api::object_ptr<td_api::ReportChatResult>> &&promise);
 
   void report_dialog_photo(DialogId dialog_id, FileId file_id, ReportReason &&reason, Promise<Unit> &&promise);
+
+  Status can_delete_all_dialog_messages_by_sender(DialogId dialog_id) const;
 
   Status can_pin_messages(DialogId dialog_id) const;
 
@@ -284,7 +292,7 @@ class DialogManager final : public Actor {
 
   void set_dialog_message_ttl_on_server(DialogId dialog_id, int32 ttl, Promise<Unit> &&promise);
 
-  void set_dialog_theme_on_server(DialogId dialog_id, const string &theme_name, Promise<Unit> &&promise);
+  void set_dialog_theme_on_server(DialogId dialog_id, const string &theme_name, bool is_gift, Promise<Unit> &&promise);
 
   void toggle_dialog_is_blocked_on_server(DialogId dialog_id, bool is_blocked, bool is_blocked_for_stories,
                                           uint64 log_event_id);

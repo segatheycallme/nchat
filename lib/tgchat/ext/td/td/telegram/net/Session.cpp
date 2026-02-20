@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -182,10 +182,10 @@ class GenAuthKeyActor final : public Actor {
 
   void hangup() final {
     if (connection_promise_) {
-      connection_promise_.set_error(Status::Error(1, "Canceled"));
+      connection_promise_.set_error(1, "Canceled");
     }
     if (handshake_promise_) {
-      handshake_promise_.set_error(Status::Error(1, "Canceled"));
+      handshake_promise_.set_error(1, "Canceled");
     }
     stop();
   }
@@ -370,6 +370,8 @@ void Session::send(NetQueryPtr &&query) {
   last_activity_timestamp_ = Time::now();
 
   // query->debug(PSTRING() << get_name() << ": received by Session");
+  query->set_real_dc_id(raw_dc_id_);
+  query->set_main_auth_key_id(auth_data_.get_main_auth_key().id());
   query->set_session_id(auth_data_.get_session_id());
   VLOG(net_query) << "Receive query " << query;
   if (query->update_is_ready()) {
@@ -570,8 +572,8 @@ Status Session::on_pong(double ping_time, double pong_time, double current_time)
       status = Status::Error(PSLICE() << "No state info for " << unknown_queries_.size() << " queries from auth key "
                                       << auth_data_.get_auth_key().id() << " for "
                                       << format::as_time(Time::now() - current_info_->created_at_)
-                                      << " after ping sent at " << ping_time << " and answered at " << pong_time
-                                      << " with the current server time " << current_time);
+                                      << " after ping expected to be answered at " << ping_time << " and answered at "
+                                      << pong_time << " with the current server time " << current_time);
     }
     if (!sent_query_list_.empty()) {
       double query_timeout = 60 + (current_time - ping_time);
@@ -582,8 +584,8 @@ Status Session::on_pong(double ping_time, double pong_time, double current_time)
             status =
                 Status::Error(PSLICE() << "No answer from auth key " << auth_data_.get_auth_key().id() << " for "
                                        << query->net_query_ << " for " << format::as_time(Time::now() - query->sent_at_)
-                                       << " after ping sent at " << ping_time << " and answered at " << pong_time
-                                       << " with the current server time " << current_time);
+                                       << " after ping expected to be answered at " << ping_time << " and answered at "
+                                       << pong_time << " with the current server time " << current_time);
           }
           query->is_acknowledged_ = false;
         } else {

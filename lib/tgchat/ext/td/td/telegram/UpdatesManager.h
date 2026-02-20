@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -121,8 +121,11 @@ class UpdatesManager final : public Actor {
 
   static string extract_join_group_call_presentation_params(telegram_api::Updates *updates_ptr);
 
+  static vector<telegram_api::object_ptr<telegram_api::updateGroupCallMessage>> extract_group_call_messages(
+      telegram_api::Updates *updates_ptr);
+
   static telegram_api::object_ptr<telegram_api::StoryItem> extract_story(telegram_api::Updates *updates_ptr,
-                                                                         DialogId owner_dialog_id);
+                                                                         DialogId owner_dialog_id, bool is_business);
 
   static vector<DialogId> get_update_notify_settings_dialog_ids(const telegram_api::Updates *updates_ptr);
 
@@ -287,6 +290,9 @@ class UpdatesManager final : public Actor {
   double next_data_reload_time_ = 0.0;
   Timeout data_reload_timeout_;
 
+  double next_often_data_reload_time_ = 0.0;
+  Timeout often_data_reload_timeout_;
+
   bool is_ping_sent_ = false;
 
   bool expect_pts_gap_ = false;
@@ -440,6 +446,14 @@ class UpdatesManager final : public Actor {
 
   void on_data_reloaded();
 
+  static void try_reload_often_data_static(void *td);
+
+  void schedule_often_data_reload();
+
+  void try_reload_often_data();
+
+  void on_often_data_reloaded();
+
   uint64 get_most_unused_auth_key_id();
 
   static vector<int32> get_update_ids(const telegram_api::Updates *updates_ptr);
@@ -566,9 +580,10 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateReadMonoForumInbox> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateReadMonoForumOutbox> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updateMonoForumNoPaidException> update, Promise<Unit> &&promise);
 
-  void on_update(tl_object_ptr<telegram_api::updateChannelPinnedTopic> update, Promise<Unit> &&promise);
-  void on_update(tl_object_ptr<telegram_api::updateChannelPinnedTopics> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updatePinnedForumTopic> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updatePinnedForumTopics> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updatePinnedMessages> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updatePinnedChannelMessages> update, Promise<Unit> &&promise);
@@ -600,6 +615,8 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateConfig> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateEmojiGameInfo> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updatePtsChanged> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updatePrivacy> update, Promise<Unit> &&promise);
@@ -629,6 +646,16 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateGroupCallChainBlocks> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateGroupCall> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateGroupCallParticipants> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateGroupCallMessage> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateGroupCallEncryptedMessage> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateDeleteGroupCallMessages> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateStarGiftAuctionState> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateStarGiftAuctionUserState> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateContactsReset> update, Promise<Unit> &&promise);
 
@@ -700,8 +727,6 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateBotEditBusinessMessage> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateBotDeleteBusinessMessage> update, Promise<Unit> &&promise);
-
-  void on_update(tl_object_ptr<telegram_api::updateBroadcastRevenueTransactions> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateStarsBalance> update, Promise<Unit> &&promise);
 

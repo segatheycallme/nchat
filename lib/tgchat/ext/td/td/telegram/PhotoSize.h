@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -74,6 +74,11 @@ PhotoSize get_input_thumbnail_photo_size(FileManager *file_manager, const td_api
 
 td_api::object_ptr<td_api::thumbnail> get_thumbnail_object(FileManager *file_manager, const PhotoSize &photo_size,
                                                            PhotoFormat format);
+
+td_api::object_ptr<td_api::photoSize> get_photo_size_object(FileManager *file_manager, const PhotoSize *photo_size);
+
+vector<td_api::object_ptr<td_api::photoSize>> get_photo_sizes_object(FileManager *file_manager,
+                                                                     const vector<PhotoSize> &photo_sizes);
 
 bool operator==(const PhotoSize &lhs, const PhotoSize &rhs);
 bool operator!=(const PhotoSize &lhs, const PhotoSize &rhs);

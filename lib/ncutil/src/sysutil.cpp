@@ -1,6 +1,6 @@
 // sysutil.cpp
 //
-// Copyright (c) 2024 Kristofer Berggren
+// Copyright (c) 2024-2025 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -11,19 +11,22 @@
 
 #include <unistd.h>
 
+#include <sys/wait.h>
+
 #include "fileutil.h"
+#include "log.h"
 #include "strutil.h"
 
 std::string SysUtil::GetCompiler()
 {
 #if defined(__VERSION__)
 #if !defined(__clang__) && defined(__GNUC__)
-  std::string compiler = "GCC " __VERSION__;
+  std::string compiler = "gcc " __VERSION__;
 #else
   std::string compiler = __VERSION__;
 #endif
 #else
-  std::string compiler = "Unknown compiler";
+  std::string compiler = "unknown compiler";
 #endif
 
 #if defined(__linux__)
@@ -38,12 +41,12 @@ std::string SysUtil::GetCompiler()
   std::string libc;
 #endif
 
-  return compiler + (!libc.empty() ? " " + libc : "");
+  return StrUtil::ToLower(compiler + (!libc.empty() ? " " + libc : ""));
 }
 
 std::string SysUtil::GetGo(const std::string& p_GoVersion)
 {
-  return "Go " + (p_GoVersion.empty() ? "N/A" : p_GoVersion);
+  return StrUtil::ToLower("go " + (p_GoVersion.empty() ? "n/a" : p_GoVersion));
 }
 
 std::string SysUtil::GetOsArch()
@@ -80,7 +83,7 @@ std::string SysUtil::GetOsArch()
   }();
 
   static const std::string osArch = os + " " + arch;
-  return osArch;
+  return StrUtil::ToLower(osArch);
 }
 
 bool SysUtil::IsSupportedLibc()
@@ -90,4 +93,83 @@ bool SysUtil::IsSupportedLibc()
 #else
   return false;
 #endif
+}
+
+bool SysUtil::RunCommand(const std::string& p_Cmd, std::string* p_StdOut /*= nullptr*/)
+{
+  const bool logStdErr = true;
+
+  std::string stdoutPath = "/dev/null";
+  if (p_StdOut != nullptr)
+  {
+    stdoutPath = FileUtil::GetTempDir() + "/stdout.txt";
+  }
+
+  std::string stderrPath = "/dev/null";
+  if (logStdErr)
+  {
+    stderrPath = FileUtil::GetTempDir() + "/stderr.txt";
+  }
+
+  const std::string cmdPrefix = "{ ";
+  const std::string cmdSuffix = " ; } >'" + stdoutPath + "' 2>'" + stderrPath + "'";
+  const std::string cmd = cmdPrefix + p_Cmd + cmdSuffix;
+
+  // run command
+  LOG_TRACE("cmd \"%s\" start", cmd.c_str());
+  const int rv = SysUtil::System(cmd);
+  if (rv != 0)
+  {
+    LOG_WARNING("cmd \"%s\" failed (%d)", cmd.c_str(), rv);
+  }
+
+  // stdout
+  if ((p_StdOut != nullptr) && FileUtil::Exists(stdoutPath))
+  {
+    std::string str = FileUtil::ReadFile(stdoutPath);
+    FileUtil::RmFile(stdoutPath);
+
+    // trim trailing linebreak
+    if (!str.empty() && str.back() == '\n')
+    {
+      str = str.substr(0, str.length() - 1);
+    }
+
+    *p_StdOut = str;
+  }
+
+  // stderr
+  if (logStdErr && FileUtil::Exists(stderrPath))
+  {
+    const std::string stderrStr = FileUtil::ReadFile(stderrPath);
+    FileUtil::RmFile(stderrPath);
+    if (!stderrStr.empty())
+    {
+      LOG_WARNING("cmd \"%s\" stderr:", cmd.c_str());
+      Log::Dump(stderrStr.c_str());
+    }
+  }
+
+  return (rv == 0);
+}
+
+int SysUtil::System(const std::string& p_Cmd)
+{
+#if defined(HAVE_TERMUX)
+  static const std::string shPath = "/data/data/com.termux/files/usr/bin/sh";
+#else
+  static const std::string shPath = "/bin/sh";
+#endif
+
+  pid_t pid = fork();
+  if (pid == 0)
+  {
+    execl(shPath.c_str(), "sh", "-c", p_Cmd.c_str(), (char*)nullptr);
+    _exit(127);
+  }
+
+  if (pid < 0) return -1;
+
+  int status = 0;
+  return (waitpid(pid, &status, 0) < 0) ? -1 : status;
 }

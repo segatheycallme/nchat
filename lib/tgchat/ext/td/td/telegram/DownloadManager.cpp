@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -217,13 +217,13 @@ class DownloadManagerImpl final : public DownloadManager {
     }
 
     if (limit <= 0) {
-      return promise.set_error(Status::Error(400, "Limit must be positive"));
+      return promise.set_error(400, "Limit must be positive");
     }
     int64 offset_int64 = std::numeric_limits<int64>::max();
     if (!offset.empty()) {
       auto r_offset = to_integer_safe<int64>(offset);
       if (r_offset.is_error()) {
-        return promise.set_error(Status::Error(400, "Invalid offset"));
+        return promise.set_error(400, "Invalid offset");
       }
       offset_int64 = r_offset.move_as_ok();
     }

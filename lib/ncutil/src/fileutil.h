@@ -1,6 +1,6 @@
 // fileutil.h
 //
-// Copyright (c) 2020-2024 Kristofer Berggren
+// Copyright (c) 2020-2025 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -64,6 +64,7 @@ class FileUtil
 public:
   static std::string AbsolutePath(const std::string& p_Path);
   static std::string BaseName(const std::string& p_Path);
+  static void CleanupTempDir();
   static void CopyFile(const std::string& p_SrcPath, const std::string& p_DstPath);
   static std::string DirName(const std::string& p_Path);
   static bool Exists(const std::string& p_Path);
@@ -79,16 +80,18 @@ public:
   static std::string GetLibSuffix();
   static std::string GetSuffixedCount(ssize_t p_Size);
   static std::string GetSuffixedSize(ssize_t p_Size);
+  static std::string GetTempDir();
   static void InitDirVersion(const std::string& p_Dir, int p_Version);
+  static void InitTempDir();
   static bool IsDir(const std::string& p_Path);
   static std::set<DirEntry, DirEntryCompare> ListPaths(const std::string& p_Folder);
   static void MkDir(const std::string& p_Path);
-  static std::string MkTempFile();
   static void Move(const std::string& p_From, const std::string& p_To);
   static std::string ReadFile(const std::string& p_Path);
   static std::string RemoveFileExt(const std::string& p_Path);
   static void RmDir(const std::string& p_Path);
   static void RmFile(const std::string& p_Path);
+  static void RmFilesByAge(const std::string& p_Dir, const std::string& p_Pattern, int p_MinAgeSec);
   static void SetApplicationDir(const std::string& p_Path);
   static void SetDirVersion(const std::string& p_Dir, int p_Version);
   static void SetDownloadsDir(const std::string& p_DownloadsDir);

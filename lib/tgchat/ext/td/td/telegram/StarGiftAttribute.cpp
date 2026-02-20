@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,6 +8,7 @@
 
 #include "td/telegram/Dependencies.h"
 #include "td/telegram/MessageSender.h"
+#include "td/telegram/misc.h"
 #include "td/telegram/StickerFormat.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/Td.h"
@@ -70,6 +71,11 @@ StarGiftAttributeBackdrop::StarGiftAttributeBackdrop(
     , rarity_permille_(attribute->rarity_permille_) {
 }
 
+bool StarGiftAttributeBackdrop::is_valid() const {
+  return 0 < rarity_permille_ && rarity_permille_ <= 1000 && is_valid_color(center_color_) &&
+         is_valid_color(edge_color_) && is_valid_color(pattern_color_) && is_valid_color(text_color_);
+}
+
 td_api::object_ptr<td_api::upgradedGiftBackdrop> StarGiftAttributeBackdrop::get_upgraded_gift_backdrop_object() const {
   CHECK(is_valid());
   return td_api::make_object<td_api::upgradedGiftBackdrop>(
@@ -109,7 +115,7 @@ StarGiftAttributeOriginalDetails::get_upgraded_gift_original_details_object(Td *
       sender_dialog_id_ == DialogId()
           ? nullptr
           : get_message_sender_object(td, sender_dialog_id_, "upgradedGiftOriginalDetails sender"),
-      get_message_sender_object(td, receiver_dialog_id_, "upgradedGiftOriginalDetails sender"),
+      get_message_sender_object(td, receiver_dialog_id_, "upgradedGiftOriginalDetails receiver"),
       get_formatted_text_object(td->user_manager_.get(), message_, true, -1), date_);
 }
 

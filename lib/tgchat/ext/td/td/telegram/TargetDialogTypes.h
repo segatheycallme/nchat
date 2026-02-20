@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -25,7 +25,6 @@ class TargetDialogTypes {
   static constexpr int64 FULL_MASK = USERS_MASK | BOTS_MASK | CHATS_MASK | BROADCASTS_MASK;
 
   friend bool operator==(const TargetDialogTypes &lhs, const TargetDialogTypes &rhs);
-  friend bool operator!=(const TargetDialogTypes &lhs, const TargetDialogTypes &rhs);
 
   friend StringBuilder &operator<<(StringBuilder &string_builder, const TargetDialogTypes &types);
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -563,7 +563,7 @@ void TdDb::open_impl(Parameters parameters, Promise<OpenedDatabase> &&promise) {
     SqliteDb::destroy(get_sqlite_path(parameters)).ignore();
     init_sqlite_status = db->init_sqlite(parameters, new_sqlite_key, old_sqlite_key, *binlog_pmc);
     if (init_sqlite_status.is_error()) {
-      return promise.set_error(Status::Error(400, init_sqlite_status.message()));
+      return promise.set_error(400, init_sqlite_status.message());
     }
   }
   if (drop_sqlite_key) {

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -85,7 +85,7 @@ class ResolveReferralProgramQuery final : public Td::ResultHandler {
     td_->chat_manager_->on_get_chats(std::move(ptr->chats_), "ResolveReferralProgramQuery");
 
     DialogId dialog_id(ptr->peer_);
-    if (dialog_id.get_type() != DialogType::User || !td_->user_manager_->have_user(dialog_id.get_user_id())) {
+    if (dialog_id.get_type() != DialogType::User || !td_->user_manager_->have_min_user(dialog_id.get_user_id())) {
       return on_error(Status::Error(400, "Chat not found"));
     }
 
@@ -415,7 +415,7 @@ void ReferralProgramManager::tear_down() {
 void ReferralProgramManager::set_dialog_referral_program(DialogId dialog_id, ReferralProgramParameters parameters,
                                                          Promise<Unit> &&promise) {
   if (!parameters.is_valid() && parameters != ReferralProgramParameters()) {
-    return promise.set_error(Status::Error(400, "Invalid affiliate parameters specified"));
+    return promise.set_error(400, "Invalid affiliate parameters specified");
   }
   switch (dialog_id.get_type()) {
     case DialogType::User: {
@@ -423,13 +423,13 @@ void ReferralProgramManager::set_dialog_referral_program(DialogId dialog_id, Ref
       if (bot_data.can_be_edited) {
         break;
       }
-      return promise.set_error(Status::Error(400, "The bot isn't owned"));
+      return promise.set_error(400, "The bot isn't owned");
     }
     case DialogType::Chat:
     case DialogType::Channel:
     case DialogType::SecretChat:
     case DialogType::None:
-      return promise.set_error(Status::Error(400, "The chat can't have affiliate program"));
+      return promise.set_error(400, "The chat can't have affiliate program");
     default:
       UNREACHABLE();
   }
@@ -450,7 +450,7 @@ void ReferralProgramManager::search_referral_programs(
     const string &offset, int32 limit, Promise<td_api::object_ptr<td_api::foundAffiliatePrograms>> &&promise) {
   TRY_RESULT_PROMISE(promise, affiliate_type, AffiliateType::get_affiliate_type(td_, affiliate));
   if (limit <= 0) {
-    return promise.set_error(Status::Error(400, "Limit must be positive"));
+    return promise.set_error(400, "Limit must be positive");
   }
 
   td_->create_handler<GetSuggestedStarRefBotsQuery>(std::move(promise))
@@ -488,7 +488,7 @@ void ReferralProgramManager::get_connected_referral_programs(
     Promise<td_api::object_ptr<td_api::connectedAffiliatePrograms>> &&promise) {
   TRY_RESULT_PROMISE(promise, affiliate_type, AffiliateType::get_affiliate_type(td_, affiliate));
   if (limit <= 0) {
-    return promise.set_error(Status::Error(400, "Limit must be positive"));
+    return promise.set_error(400, "Limit must be positive");
   }
 
   td_->create_handler<GetConnectedStarRefBotsQuery>(std::move(promise))->send(affiliate_type, offset, limit);
