@@ -31,8 +31,11 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"os"
 
 	"github.com/rs/zerolog"
+	"go.mau.fi/util/fallocate"
+	"go.mau.fi/util/pkcs7"
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
@@ -59,25 +62,54 @@ var ErrInvalidMACForAttachment = errors.New("invalid MAC for attachment")
 var ErrInvalidDigestForAttachment = errors.New("invalid digest for attachment")
 var ErrAttachmentNotFound = errors.New("attachment not found on server")
 
-func DownloadAttachmentWithPointer(ctx context.Context, a *signalpb.AttachmentPointer, plaintextHash []byte) ([]byte, error) {
+func DownloadAttachmentWithPointer(ctx context.Context, a *signalpb.AttachmentPointer, plaintextHash []byte, into *os.File) ([]byte, error) {
 	digest := a.GetDigest()
 	plaintextDigest := false
 	if digest == nil && plaintextHash != nil {
 		digest = plaintextHash
 		plaintextDigest = true
 	}
-	return DownloadAttachment(ctx, a.GetCdnId(), a.GetCdnKey(), a.GetCdnNumber(), a.Key, digest, plaintextDigest, a.GetSize())
+	return DownloadAttachment(
+		ctx, a.GetCdnId(), a.GetCdnKey(), a.GetCdnNumber(), a.Key, digest, plaintextDigest, a.GetSize(), into,
+	)
 }
 
-func DownloadAttachment(ctx context.Context, cdnID uint64, cdnKey string, cdnNumber uint32, key, digest []byte, plaintextDigest bool, size uint32) ([]byte, error) {
+func DownloadAttachment(
+	ctx context.Context,
+	cdnID uint64,
+	cdnKey string,
+	cdnNumber uint32,
+	key, digest []byte,
+	plaintextDigest bool,
+	size uint32,
+	into *os.File,
+) ([]byte, error) {
 	resp, err := web.GetAttachment(ctx, getAttachmentPath(cdnID, cdnKey), cdnNumber)
 	if err != nil {
 		return nil, err
 	}
-	bodyReader := resp.Body
-	defer bodyReader.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
-	body, err := io.ReadAll(bodyReader)
+	var body []byte
+	var downloadedSize int64
+	if resp.StatusCode > 400 {
+		body, err = io.ReadAll(io.LimitReader(resp.Body, 4096))
+	} else if into == nil {
+		if resp.ContentLength > 0 {
+			body = make([]byte, resp.ContentLength)
+			_, err = io.ReadFull(resp.Body, body)
+		} else {
+			body, err = io.ReadAll(http.MaxBytesReader(nil, resp.Body, max(int64(size), 32*1024)*2))
+		}
+	} else {
+		err = fallocate.Fallocate(into, int(resp.ContentLength))
+		if err != nil {
+			return nil, fmt.Errorf("failed to pre-allocate file for attachment: %w", err)
+		}
+		downloadedSize, err = io.Copy(into, resp.Body)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -93,11 +125,26 @@ func DownloadAttachment(ctx context.Context, cdnID uint64, cdnKey string, cdnNum
 		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
+	if into != nil {
+		if _, err = into.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek attachment file after downloading: %w", err)
+		}
+		return nil, decryptAttachmentFile(into, downloadedSize, key, digest, plaintextDigest, size)
+	}
 	return decryptAttachment(body, key, digest, plaintextDigest, size)
 }
 
 const MACLength = 32
 const IVLength = 16
+
+func macAndAESDecrypt(body, key []byte) ([]byte, error) {
+	l := len(body) - MACLength
+	if !verifyMAC(key[MACLength:], body[:l], body[l:]) {
+		return nil, ErrInvalidMACForAttachment
+	}
+
+	return aesDecrypt(key[:MACLength], body[:l])
+}
 
 func decryptAttachment(body, key, digest []byte, plaintextDigest bool, size uint32) ([]byte, error) {
 	if !plaintextDigest {
@@ -106,12 +153,7 @@ func decryptAttachment(body, key, digest []byte, plaintextDigest bool, size uint
 			return nil, ErrInvalidDigestForAttachment
 		}
 	}
-	l := len(body) - MACLength
-	if !verifyMAC(key[MACLength:], body[:l], body[l:]) {
-		return nil, ErrInvalidMACForAttachment
-	}
-
-	decrypted, err := aesDecrypt(key[:MACLength], body[:l])
+	decrypted, err := macAndAESDecrypt(body, key)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +168,59 @@ func decryptAttachment(body, key, digest []byte, plaintextDigest bool, size uint
 		}
 	}
 	return decrypted, nil
+}
+
+func decryptAttachmentFile(file *os.File, downloadedSize int64, key, digest []byte, plaintextDigest bool, size uint32) error {
+	if !plaintextDigest {
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, file); err != nil {
+			return fmt.Errorf("failed to hash attachment file: %w", err)
+		} else if !hmac.Equal(hasher.Sum(nil), digest) {
+			return ErrInvalidDigestForAttachment
+		} else if _, err = file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("failed to seek attachment file after hashing: %w", err)
+		}
+	}
+	mac := make([]byte, MACLength)
+	n, err := file.ReadAt(mac, downloadedSize-MACLength)
+	if err != nil {
+		return fmt.Errorf("failed to read MAC from attachment file: %w", err)
+	} else if n != MACLength {
+		return fmt.Errorf("unexpected MAC length read from attachment file: %d", n)
+	}
+	hasher := hmac.New(sha256.New, key[MACLength:])
+	_, err = io.CopyN(hasher, file, downloadedSize-MACLength)
+	if err != nil {
+		return fmt.Errorf("failed to hash attachment file for MAC verification: %w", err)
+	} else if !hmac.Equal(hasher.Sum(nil), mac) {
+		return ErrInvalidMACForAttachment
+	} else if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to seek attachment file after verifying mac: %w", err)
+	}
+
+	decryptedSize, err := aesDecryptFile(key[:MACLength], file, downloadedSize-MACLength)
+	if err != nil {
+		return err
+	} else if decryptedSize < int64(size) {
+		return fmt.Errorf("decrypted attachment length %d < expected %d", decryptedSize, size)
+	} else if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to seek attachment file after decrypting: %w", err)
+	}
+	err = file.Truncate(int64(size))
+	if err != nil {
+		return fmt.Errorf("failed to truncate attachment file to expected size: %w", err)
+	}
+	if plaintextDigest {
+		hasher = sha256.New()
+		if _, err = io.Copy(hasher, file); err != nil {
+			return fmt.Errorf("failed to hash decrypted attachment file: %w", err)
+		} else if !hmac.Equal(hasher.Sum(nil), digest) {
+			return fmt.Errorf("%w (plaintext hash)", ErrInvalidDigestForAttachment)
+		} else if _, err = file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("failed to seek attachment file after hashing plaintext: %w", err)
+		}
+	}
+	return nil
 }
 
 type attachmentV4UploadAttributes struct {
@@ -150,6 +245,14 @@ func extend(data []byte, paddedLen int) []byte {
 	}
 }
 
+func macAndAESEncrypt(keys, plaintext []byte) ([]byte, error) {
+	encrypted, err := aesEncrypt(keys[:32], plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return appendMAC(keys[32:], encrypted), nil
+}
+
 func (cli *Client) UploadAttachment(ctx context.Context, body []byte) (*signalpb.AttachmentPointer, error) {
 	log := zerolog.Ctx(ctx).With().Str("func", "upload attachment").Logger()
 	keys := random.Bytes(64) // combined AES and MAC keys
@@ -165,11 +268,10 @@ func (cli *Client) UploadAttachment(ctx context.Context, body []byte) (*signalpb
 	}
 	body = extend(body, paddedLen)
 
-	encrypted, err := aesEncrypt(keys[:32], body)
+	encryptedWithMAC, err := macAndAESEncrypt(keys, body)
 	if err != nil {
 		return nil, err
 	}
-	encryptedWithMAC := appendMAC(keys[32:], encrypted)
 
 	// Get upload attributes from Signal server
 	attributesPath := "/v4/attachments/form/upload"
@@ -279,12 +381,17 @@ func (cli *Client) uploadAttachmentTUS(
 	return nil
 }
 
-func (cli *Client) UploadGroupAvatar(ctx context.Context, avatarBytes []byte, gid types.GroupIdentifier) (string, error) {
+func (cli *Client) UploadGroupAvatar(ctx context.Context, avatarBytes []byte, gid types.GroupIdentifier, groupMasterKey types.SerializedGroupMasterKey) (string, error) {
 	log := zerolog.Ctx(ctx)
-	groupMasterKey, err := cli.Store.GroupStore.MasterKeyFromGroupIdentifier(ctx, gid)
-	if err != nil {
-		log.Err(err).Msg("Could not get master key from group id")
-		return "", err
+	if groupMasterKey == "" {
+		var err error
+		groupMasterKey, err = cli.Store.GroupStore.MasterKeyFromGroupIdentifier(ctx, gid)
+		if err != nil {
+			log.Err(err).Msg("Could not get master key from group id")
+			return "", err
+		} else if groupMasterKey == "" {
+			return "", fmt.Errorf("no master key found for group %s", gid)
+		}
 	}
 	groupAuth, err := cli.GetAuthorizationForToday(ctx, masterKeyToBytes(groupMasterKey))
 	if err != nil {
@@ -371,14 +478,56 @@ func aesDecrypt(key, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("ciphertext not multiple of AES blocksize (%d extra bytes)", len(ciphertext)%aes.BlockSize)
 	}
 
-	iv := ciphertext[:aes.BlockSize]
+	iv := ciphertext[:IVLength]
+	ciphertext = ciphertext[IVLength:]
 	mode := cipher.NewCBCDecrypter(block, iv)
 	mode.CryptBlocks(ciphertext, ciphertext)
-	pad := ciphertext[len(ciphertext)-1]
-	if pad > aes.BlockSize {
-		return nil, fmt.Errorf("pad value (%d) larger than AES blocksize (%d)", pad, aes.BlockSize)
+	return pkcs7.Unpad(ciphertext)
+}
+
+func aesDecryptFile(key []byte, file *os.File, downloadedSize int64) (int64, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return 0, err
 	}
-	return ciphertext[aes.BlockSize : len(ciphertext)-int(pad)], nil
+	fileReader := io.LimitReader(file, downloadedSize)
+
+	if downloadedSize%aes.BlockSize != 0 {
+		return 0, fmt.Errorf("ciphertext not multiple of AES blocksize (%d extra bytes)", downloadedSize%aes.BlockSize)
+	}
+
+	iv := make([]byte, IVLength)
+	n, err := fileReader.Read(iv)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read IV from attachment file: %w", err)
+	} else if n != IVLength {
+		return 0, fmt.Errorf("unexpected IV length read from attachment file: %d", n)
+	}
+	mode := cipher.NewCBCDecrypter(block, iv)
+	buf := make([]byte, 4096)
+	var offset int64
+	var pad byte
+	for {
+		n, err = fileReader.Read(buf)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return 0, fmt.Errorf("failed to read from attachment file: %w", err)
+		}
+		if n > 0 {
+			mode.CryptBlocks(buf[:n], buf[:n])
+			if _, err = file.WriteAt(buf[:n], offset); err != nil {
+				return 0, fmt.Errorf("failed to write decrypted data to attachment file: %w", err)
+			}
+			offset += int64(n)
+			pad = buf[n-1]
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+	}
+	if pad > aes.BlockSize {
+		return 0, fmt.Errorf("pad value (%d) larger than AES blocksize (%d)", pad, aes.BlockSize)
+	}
+	return downloadedSize - int64(pad), nil
 }
 
 func appendMAC(key, body []byte) []byte {
@@ -393,14 +542,11 @@ func aesEncrypt(key, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	pad := aes.BlockSize - len(plaintext)%aes.BlockSize
-	plaintext = append(plaintext, bytes.Repeat([]byte{byte(pad)}, pad)...)
-
-	ciphertext := make([]byte, len(plaintext))
+	plaintext = pkcs7.Pad(plaintext, aes.BlockSize)
 	iv := random.Bytes(16)
 
 	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(ciphertext, plaintext)
+	mode.CryptBlocks(plaintext, plaintext)
 
-	return append(iv, ciphertext...), nil
+	return append(iv, plaintext...), nil
 }

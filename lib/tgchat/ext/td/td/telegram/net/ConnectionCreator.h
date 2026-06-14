@@ -15,7 +15,6 @@
 
 #include "td/mtproto/AuthData.h"
 #include "td/mtproto/ConnectionManager.h"
-#include "td/mtproto/Handshake.h"
 #include "td/mtproto/RawConnection.h"
 #include "td/mtproto/TransportType.h"
 
@@ -71,18 +70,22 @@ class ConnectionCreator final : public NetQueryCallback {
   void set_net_stats_callback(std::shared_ptr<NetStatsCallback> common_callback,
                               std::shared_ptr<NetStatsCallback> media_callback);
 
-  void add_proxy(int32 old_proxy_id, string server, int32 port, bool enable,
-                 td_api::object_ptr<td_api::ProxyType> proxy_type, Promise<td_api::object_ptr<td_api::proxy>> promise);
-  void enable_proxy(int32 proxy_id, Promise<Unit> promise);
-  void disable_proxy(Promise<Unit> promise);
-  void remove_proxy(int32 proxy_id, Promise<Unit> promise);
-  void get_proxies(Promise<td_api::object_ptr<td_api::proxies>> promise);
-  void get_proxy_link(int32 proxy_id, Promise<string> promise);
-  void ping_proxy(int32 proxy_id, Promise<double> promise);
+  void add_proxy(int32 old_proxy_id, td_api::object_ptr<td_api::proxy> proxy, bool enable, string comment,
+                 Promise<td_api::object_ptr<td_api::addedProxy>> promise);
 
-  void test_proxy(Proxy &&proxy, int32 dc_id, double timeout, Promise<Unit> &&promise);
+  void enable_proxy(int32 proxy_id, Promise<Unit> promise);
+
+  void disable_proxy(Promise<Unit> promise);
+
+  void remove_proxy(int32 proxy_id, Promise<Unit> promise);
+
+  void get_proxies(Promise<td_api::object_ptr<td_api::addedProxies>> promise);
+
+  void ping_proxy(td_api::object_ptr<td_api::proxy> input_proxy, Promise<double> promise);
 
  private:
+  friend class ProxyChecker;
+
   ActorShared<> parent_;
   DcOptionsSet dc_options_set_;
   bool network_flag_ = false;
@@ -92,7 +95,7 @@ class ConnectionCreator final : public NetQueryCallback {
   bool is_inited_ = false;
 
   static constexpr int32 MAX_PROXY_LAST_USED_SAVE_DELAY = 60;
-  std::map<int32, Proxy> proxies_;
+  std::map<int32, std::pair<Proxy, string>> proxies_;
   FlatHashMap<int32, int32> proxy_last_used_date_;
   FlatHashMap<int32, int32> proxy_last_used_saved_date_;
   int32 max_proxy_id_ = 0;
@@ -178,33 +181,23 @@ class ConnectionCreator final : public NetQueryCallback {
     unique_ptr<mtproto::RawConnection::StatsCallback> stats_callback;
   };
 
-  struct TestProxyRequest {
-    Proxy proxy_;
-    int16 dc_id_ = -1;
-    ActorOwn<> child_;
-    Promise<Unit> promise_;
-
-    mtproto::TransportType get_transport() const {
-      return mtproto::TransportType{mtproto::TransportType::ObfuscatedTcp, dc_id_, proxy_.secret()};
-    }
-  };
-  uint64 test_proxy_request_id_ = 0;
-  FlatHashMap<uint64, unique_ptr<TestProxyRequest>> test_proxy_requests_;
-
   uint64 next_token() {
     return ++current_token_;
   }
 
   ActorShared<ConnectionCreator> create_reference(int64 token);
 
+  static void set_proxy_comment(int32 proxy_id, string &comment, string &new_comment);
+
   void set_active_proxy_id(int32 proxy_id, bool from_binlog = false);
   void enable_proxy_impl(int32 proxy_id);
   void disable_proxy_impl();
   void on_proxy_changed(bool from_db);
   static string get_proxy_database_key(int32 proxy_id);
+  static string get_proxy_comment_database_key(int32 proxy_id);
   static string get_proxy_used_database_key(int32 proxy_id);
   void save_proxy_last_used_date(int32 delay);
-  td_api::object_ptr<td_api::proxy> get_proxy_object(int32 proxy_id) const;
+  td_api::object_ptr<td_api::addedProxy> get_added_proxy_object(int32 proxy_id) const;
 
   void start_up() final;
   void hangup_shared() final;
@@ -261,21 +254,12 @@ class ConnectionCreator final : public NetQueryCallback {
 
   ActorId<GetHostByNameActor> get_dns_resolver();
 
-  void ping_proxy_resolved(int32 proxy_id, IPAddress ip_address, Promise<double> promise);
+  void ping_proxy_resolved(Proxy &&proxy, IPAddress ip_address, Promise<double> promise);
 
   void ping_proxy_buffered_socket_fd(IPAddress ip_address, BufferedFd<SocketFd> buffered_socket_fd,
                                      mtproto::TransportType transport_type, string debug_str, Promise<double> promise);
 
   void on_ping_main_dc_result(uint64 token, Result<double> result);
-
-  void on_test_proxy_connection_data(uint64 request_id, Result<ConnectionData> r_data);
-
-  void on_test_proxy_handshake_connection(uint64 request_id,
-                                          Result<unique_ptr<mtproto::RawConnection>> r_raw_connection);
-
-  void on_test_proxy_handshake(uint64 request_id, Result<unique_ptr<mtproto::AuthKeyHandshake>> r_handshake);
-
-  void on_test_proxy_timeout(uint64 request_id);
 };
 
 }  // namespace td

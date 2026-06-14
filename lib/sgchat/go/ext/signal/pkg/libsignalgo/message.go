@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-func Encrypt(ctx context.Context, plaintext []byte, forAddress *Address, sessionStore SessionStore, identityKeyStore IdentityKeyStore) (*CiphertextMessage, error) {
+func Encrypt(ctx context.Context, plaintext []byte, forAddress, localAddress *Address, sessionStore SessionStore, identityKeyStore IdentityKeyStore) (*CiphertextMessage, error) {
 	var ciphertextMessage C.SignalMutPointerCiphertextMessage
 	var now C.uint64_t = C.uint64_t(time.Now().Unix())
 	callbackCtx := NewCallbackContext(ctx)
@@ -36,6 +36,7 @@ func Encrypt(ctx context.Context, plaintext []byte, forAddress *Address, session
 		&ciphertextMessage,
 		BytesToBuffer(plaintext),
 		forAddress.constPtr(),
+		localAddress.constPtr(),
 		callbackCtx.wrapSessionStore(sessionStore),
 		callbackCtx.wrapIdentityKeyStore(identityKeyStore),
 		now,
@@ -48,7 +49,7 @@ func Encrypt(ctx context.Context, plaintext []byte, forAddress *Address, session
 	return wrapCiphertextMessage(ciphertextMessage.raw), nil
 }
 
-func Decrypt(ctx context.Context, message *Message, fromAddress *Address, sessionStore SessionStore, identityStore IdentityKeyStore) ([]byte, error) {
+func Decrypt(ctx context.Context, message *Message, fromAddress, localAddress *Address, sessionStore SessionStore, identityStore IdentityKeyStore) ([]byte, error) {
 	callbackCtx := NewCallbackContext(ctx)
 	defer callbackCtx.Unref()
 	var decrypted C.SignalOwnedBuffer = C.SignalOwnedBuffer{}
@@ -56,6 +57,7 @@ func Decrypt(ctx context.Context, message *Message, fromAddress *Address, sessio
 		&decrypted,
 		message.constPtr(),
 		fromAddress.constPtr(),
+		localAddress.constPtr(),
 		callbackCtx.wrapSessionStore(sessionStore),
 		callbackCtx.wrapIdentityKeyStore(identityStore),
 	)

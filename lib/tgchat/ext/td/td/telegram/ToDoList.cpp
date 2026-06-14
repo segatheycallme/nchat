@@ -41,7 +41,7 @@ Result<ToDoList> ToDoList::get_to_do_list(const Td *td, DialogId dialog_id,
   if (static_cast<int64>(utf8_length(title.text)) > max_length) {
     return Status::Error(400, PSLICE() << "Checklist title length must not exceed " << max_length);
   }
-  remove_unsupported_entities(title);
+  remove_unallowed_quote_entities(title);
 
   ToDoList result;
   result.title_ = std::move(title);
@@ -93,24 +93,8 @@ telegram_api::object_ptr<telegram_api::inputMediaTodo> ToDoList::get_input_media
   return telegram_api::make_object<telegram_api::inputMediaTodo>(get_input_todo_list(user_manager));
 }
 
-bool ToDoList::remove_unsupported_entities(FormattedText &text) {
-  return td::remove_if(text.entities, [&](const MessageEntity &entity) {
-    switch (entity.type) {
-      case MessageEntity::Type::Bold:
-      case MessageEntity::Type::Italic:
-      case MessageEntity::Type::Underline:
-      case MessageEntity::Type::Strikethrough:
-      case MessageEntity::Type::Spoiler:
-      case MessageEntity::Type::CustomEmoji:
-        return false;
-      default:
-        return true;
-    }
-  });
-}
-
 void ToDoList::validate(const char *source) {
-  if (remove_unsupported_entities(title_)) {
+  if (remove_unallowed_quote_entities(title_)) {
     LOG(ERROR) << "Receive unexpected checklist title entities from " << source;
   }
   for (auto &item : items_) {
@@ -120,13 +104,14 @@ void ToDoList::validate(const char *source) {
 
 td_api::object_ptr<td_api::checklist> ToDoList::get_checklist_object(Td *td, const vector<ToDoCompletion> &completions,
                                                                      DialogId dialog_id, MessageId message_id,
-                                                                     bool is_outgoing, bool is_forward) const {
+                                                                     bool is_outgoing, bool is_forward,
+                                                                     bool is_real_message_content) const {
   auto tasks = transform(
       items_, [td, &completions](const auto &item) { return item.get_checklist_task_object(td, completions); });
   if (!is_outgoing && dialog_id == td->dialog_manager_->get_my_dialog_id()) {
     is_outgoing = true;
   }
-  bool is_server = dialog_id.is_valid() && message_id.is_server();
+  bool is_server = dialog_id.is_valid() && message_id.is_server() && is_real_message_content;
   bool can_complete = !td->auth_manager_->is_bot() && is_server && !is_forward && (is_outgoing || others_can_complete_);
   bool can_add_tasks = is_server && !is_forward && (is_outgoing || others_can_append_) && get_can_append_items(td, 1);
   return td_api::make_object<td_api::checklist>(get_formatted_text_object(td->user_manager_.get(), title_, true, -1),

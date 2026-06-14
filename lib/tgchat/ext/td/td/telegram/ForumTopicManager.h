@@ -47,6 +47,8 @@ class ForumTopicManager final : public Actor {
 
   Status is_forum(DialogId dialog_id, bool allow_bots = false);
 
+  bool can_send_message_to_forum_topic(DialogId dialog_id, ForumTopicId forum_topic_id) const;
+
   void create_forum_topic(DialogId dialog_id, string &&title, bool title_missing,
                           td_api::object_ptr<td_api::forumTopicIcon> &&icon,
                           Promise<td_api::object_ptr<td_api::forumTopicInfo>> &&promise);
@@ -132,7 +134,13 @@ class ForumTopicManager final : public Actor {
 
   void on_topic_reaction_count_changed(DialogId dialog_id, ForumTopicId forum_topic_id, int32 count, bool is_relative);
 
+  void on_topic_poll_vote_count_changed(DialogId dialog_id, ForumTopicId forum_topic_id, int32 count, bool is_relative);
+
   void repair_topic_unread_mention_count(DialogId dialog_id, ForumTopicId forum_topic_id);
+
+  void repair_topic_unread_reaction_count(DialogId dialog_id, ForumTopicId forum_topic_id);
+
+  void repair_topic_unread_poll_vote_count(DialogId dialog_id, ForumTopicId forum_topic_id);
 
  private:
   static constexpr size_t MAX_FORUM_TOPIC_TITLE_LENGTH = 128;  // server-side limit for forum topic title
@@ -140,6 +148,7 @@ class ForumTopicManager final : public Actor {
   struct Topic {
     unique_ptr<ForumTopicInfo> info_;
     unique_ptr<ForumTopic> topic_;
+    int32 receive_date_ = 0;
     int32 message_count_ = 0;
     mutable bool need_save_to_database_ = true;
 

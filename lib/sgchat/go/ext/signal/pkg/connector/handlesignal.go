@@ -37,6 +37,7 @@ import (
 
 	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
 	"go.mau.fi/mautrix-signal/pkg/signalid"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/events"
 	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
@@ -183,7 +184,7 @@ func (evt *Bv2ChatEvent) GetType() bridgev2.RemoteEventType {
 				return bridgev2.RemoteEventReactionRemove
 			}
 			return bridgev2.RemoteEventReaction
-		case innerEvt.Delete != nil:
+		case innerEvt.Delete != nil, innerEvt.AdminDelete != nil:
 			return bridgev2.RemoteEventMessageRemove
 		case innerEvt.GetGroupV2().GetGroupChange() != nil:
 			return bridgev2.RemoteEventChatInfoChange
@@ -292,16 +293,21 @@ func (evt *Bv2ChatEvent) GetTimestamp() time.Time {
 }
 
 func (evt *Bv2ChatEvent) GetTargetMessage() networkid.MessageID {
-	var targetAuthorACI string
+	var targetAuthorACI uuid.UUID
 	var targetSentTS uint64
 	switch innerEvt := evt.Event.(type) {
 	case *signalpb.DataMessage:
 		switch {
 		case innerEvt.Reaction != nil:
-			targetAuthorACI = innerEvt.Reaction.GetTargetAuthorAci()
+			targetAuthorACI, _ = signalmeow.ParseStringOrBinaryUUID(innerEvt.Reaction.GetTargetAuthorAci(), innerEvt.Reaction.GetTargetAuthorAciBinary())
 			targetSentTS = innerEvt.Reaction.GetTargetSentTimestamp()
 		case innerEvt.Delete != nil:
 			targetSentTS = innerEvt.Delete.GetTargetSentTimestamp()
+		case innerEvt.AdminDelete != nil:
+			if len(innerEvt.AdminDelete.GetTargetAuthorAciBinary()) == 16 {
+				targetAuthorACI = uuid.UUID(innerEvt.AdminDelete.GetTargetAuthorAciBinary())
+			}
+			targetSentTS = innerEvt.AdminDelete.GetTargetSentTimestamp()
 		default:
 			return ""
 		}
@@ -310,11 +316,10 @@ func (evt *Bv2ChatEvent) GetTargetMessage() networkid.MessageID {
 	default:
 		return ""
 	}
-	targetAuthorUUID := evt.Info.Sender
-	if targetAuthorACI != "" {
-		targetAuthorUUID, _ = uuid.Parse(targetAuthorACI)
+	if targetAuthorACI == uuid.Nil {
+		targetAuthorACI = evt.Info.Sender
 	}
-	return signalid.MakeMessageID(targetAuthorUUID, targetSentTS)
+	return signalid.MakeMessageID(targetAuthorACI, targetSentTS)
 }
 
 func (evt *Bv2ChatEvent) GetReactionEmoji() (string, networkid.EmojiID) {
@@ -421,7 +426,7 @@ func (b *Bv2Receipt) GetReadUpTo() time.Time {
 	return time.Time{}
 }
 
-var _ bridgev2.RemoteReceipt = (*Bv2Receipt)(nil)
+var _ bridgev2.RemoteReadReceipt = (*Bv2Receipt)(nil)
 
 func convertReceipts[T any](ctx context.Context, input []T, getMessageFunc func(ctx context.Context, msgID T) (*database.Message, error)) map[networkid.PortalKey]*Bv2Receipt {
 	log := zerolog.Ctx(ctx)
@@ -467,7 +472,7 @@ func (s *SignalClient) handleSignalReceipt(evt *events.Receipt) bool {
 		Stringer("sender_id", evt.Sender).
 		Stringer("receipt_type", evt.Content.GetType()).
 		Logger()
-	ctx := log.WithContext(context.TODO())
+	ctx := log.WithContext(s.Main.Bridge.BackgroundCtx)
 	receipts := convertReceipts(ctx, evt.Content.Timestamp, func(ctx context.Context, msgTS uint64) (*database.Message, error) {
 		return s.Main.Bridge.DB.Message.GetFirstPartByID(ctx, s.UserLogin.ID, signalid.MakeMessageID(s.Client.Store.ACI, msgTS))
 	})
@@ -478,9 +483,9 @@ func (s *SignalClient) handleSignalReadSelf(evt *events.ReadSelf) bool {
 	log := s.UserLogin.Log.With().
 		Str("action", "handle signal read self").
 		Logger()
-	ctx := log.WithContext(context.TODO())
+	ctx := log.WithContext(s.Main.Bridge.BackgroundCtx)
 	receipts := convertReceipts(ctx, evt.Messages, func(ctx context.Context, msgInfo *signalpb.SyncMessage_Read) (*database.Message, error) {
-		aciUUID, err := uuid.Parse(msgInfo.GetSenderAci())
+		aciUUID, err := signalmeow.ParseStringOrBinaryUUID(msgInfo.GetSenderAci(), msgInfo.GetSenderAciBinary())
 		if err != nil {
 			return nil, err
 		}
@@ -496,6 +501,13 @@ func (s *SignalClient) conversationIDToPortalKey(ctx context.Context, cid *signa
 		serviceID, err := libsignalgo.ServiceIDFromString(ident.ThreadServiceId)
 		if err != nil {
 			log.Err(err).Str("chat_id", ident.ThreadServiceId).Msg("Failed to parse delete for me conversation ID")
+			return networkid.PortalKey{}, false
+		}
+		return s.makeDMPortalKey(serviceID), true
+	case *signalpb.ConversationIdentifier_ThreadServiceIdBinary:
+		serviceID, err := libsignalgo.ServiceIDFromBytes(ident.ThreadServiceIdBinary)
+		if err != nil {
+			log.Err(err).Hex("chat_id", ident.ThreadServiceIdBinary).Msg("Failed to parse delete for me conversation ID")
 			return networkid.PortalKey{}, false
 		}
 		return s.makeDMPortalKey(serviceID), true
@@ -533,6 +545,22 @@ func (s *SignalClient) addressableMessageToID(ctx context.Context, portalKey net
 			log.Warn().
 				Object("portal_key", portalKey).
 				Str("author_service_id", typedAuthor.AuthorServiceId).
+				Msg("Dropping delete for me message with unsupported service ID type")
+			return ""
+		}
+		return signalid.MakeMessageID(serviceID.UUID, am.GetSentTimestamp())
+	case *signalpb.AddressableMessage_AuthorServiceIdBinary:
+		serviceID, err := libsignalgo.ServiceIDFromBytes(typedAuthor.AuthorServiceIdBinary)
+		if err != nil {
+			log.Err(err).
+				Object("portal_key", portalKey).
+				Hex("author_service_id_binary", typedAuthor.AuthorServiceIdBinary).
+				Msg("Failed to parse delete for me message author service ID")
+			return ""
+		} else if serviceID.Type != libsignalgo.ServiceIDTypeACI {
+			log.Warn().
+				Object("portal_key", portalKey).
+				Hex("author_service_id_binary", typedAuthor.AuthorServiceIdBinary).
 				Msg("Dropping delete for me message with unsupported service ID type")
 			return ""
 		}
@@ -665,7 +693,7 @@ func (s *SignalClient) handleSignalACIFound(evt *events.ACIFound) {
 		Stringer("aci", evt.ACI).
 		Stringer("pni", evt.PNI).
 		Logger()
-	ctx := log.WithContext(context.TODO())
+	ctx := log.WithContext(s.Main.Bridge.BackgroundCtx)
 	pniPortalKey := s.makeDMPortalKey(evt.PNI)
 	aciPortalKey := s.makeDMPortalKey(evt.ACI)
 	result, portal, err := s.Main.Bridge.ReIDPortal(ctx, pniPortalKey, aciPortalKey)
@@ -685,7 +713,7 @@ func (s *SignalClient) handleSignalACIFound(evt *events.ACIFound) {
 
 func (s *SignalClient) handleSignalContactList(evt *events.ContactList) {
 	log := s.UserLogin.Log.With().Str("action", "handle contact list").Logger()
-	ctx := log.WithContext(context.TODO())
+	ctx := log.WithContext(s.Main.Bridge.BackgroundCtx)
 	for _, contact := range evt.Contacts {
 		if contact.ACI == uuid.Nil {
 			continue

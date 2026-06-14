@@ -5,8 +5,8 @@ nchat
 |-----------|---------|
 | [![Linux](https://github.com/d99kris/nchat/workflows/Linux/badge.svg)](https://github.com/d99kris/nchat/actions?query=workflow%3ALinux) | [![macOS](https://github.com/d99kris/nchat/workflows/macOS/badge.svg)](https://github.com/d99kris/nchat/actions?query=workflow%3AmacOS) |
 
-nchat is a terminal-based chat client for Linux and macOS with support for
-Telegram and WhatsApp.
+nchat is a multi-protocol terminal-based messaging client for Linux and macOS with support for
+Telegram, WhatsApp and Signal.
 
 ![screenshot nchat](/doc/screenshot-nchat.png)
 
@@ -23,6 +23,12 @@ Features
 - Toggle to view textized emojis vs. graphical
 - View / save media files (documents, photos, videos)
 - Send and display reactions
+
+
+Optional Features
+-----------------
+Signal support is disabled by default and requires enabling a
+[feature flag](/doc/SIGNAL.md).
 
 
 Usage
@@ -61,10 +67,13 @@ Interactive Commands:
     Ctrl-x      send message
     Ctrl-y      toggle show emojis
     KeyUp       select message
+    Alt-@       insert mention
+    Alt-a       archive current chat
     Alt-d       delete/leave current chat
     Alt-e       external editor compose
     Alt-i       auto-compose reply
     Alt-n       search contacts
+    Alt-p       pin/unpin current chat
     Alt-t       external telephone call
     Alt-/       find in chat
     Alt-?       find next in chat
@@ -110,6 +119,7 @@ tested on:
 
 - macOS Sequoia 15.5
 - Ubuntu 24.04 LTS
+
 
 Install using Package Manager
 =============================
@@ -189,9 +199,11 @@ Void
 
 **Extra Dependencies**
 
-For Wayland-based systems install `wl-clipboard` to enable clipboard functionality.
+For Wayland-based systems install `wl-clipboard` to enable clipboard
+functionality.
 
-To support pasting and sending images directly from clipboard `libpng-dev` is needed.
+To support pasting images directly from clipboard `libpng-dev` is needed. On
+X11 systems `libxcb1-dev` and `libx11-dev` are needed as well.
 
 **Build**
 
@@ -225,22 +237,31 @@ code. Example:
     0. Dummy
     1. Telegram
     2. WhatsAppMd
-    3. Exit setup
+    3. Signal
+    4. Exit setup
     Select protocol (3): 1
     Enter phone number (ex. +6511111111): +6511111111
-    Enter authentication code: xxxxx
+
+    Open Telegram on your phone, go to Settings -> Devices
+    and click Link Desktop Device and scan the QR code.
+    ...
     Succesfully set up profile Telegram_+6511111111
 
-If unsure of what phone number to enter, open the Telegram app on the phone
-and press the menu button and use the number displayed there (omitting spaces,
-so for the below screenshot the number to enter is +6511111111).
+By default, nchat uses QR code authentication. The QR code should be scanned
+using the official app on the primary device. To use authentication code
+instead, set the `USE_PAIRING_CODE` environment variable (see FAQ below).
+
+If unsure of what phone number to enter, open the official app on the phone
+and look for the phone number under Settings or Profile section, and use
+the number displayed there (omitting spaces, so for the below screenshot
+the number to enter is `+6511111111`).
 
 ![screenshot telegram phone](/doc/screenshot-phone.png)
 
 Once the setup process is completed, the main UI of nchat will be loaded.
 
 In order to set up multiple protocols/profiles, exit nchat and perform the
-setup step again.
+setup step again. To remove a protocol account, use `nchat --remove`.
 
 
 Troubleshooting
@@ -304,9 +325,12 @@ intended for debugging.
 
 ### attachment_send_type
 
-Specifies whether to detect file type (audio, video, image, document) and send
-attachments as those types, instead of sending all attachments as document
-type (which typically leaves original file content intact).
+Specifies how attachments are sent:
+
+    0 = send all attachments as document type (typically preserves file content)
+    1 = detect file type (audio, video, image, document) and send as that type <- default
+    2 = like 1, but when sending just a file (no text or quote), webp files are
+        sent as stickers and mp4/m4v files as borderless auto-playing "GIFs"
 
 ### attachment_prefetch
 
@@ -357,11 +381,14 @@ Specifies whether to use bracket quoting for display-name mentions with spaces.
 
 ### message_delete
 
-Specifies handling of message deletion by other users (WhatsApp only):
+Specifies handling of message deletion by other users (WhatsApp and Signal):
 
     1 = erase message <- default
-    2 = replace message with [Deleted] text
-    3 = prefix message with [Deleted] text
+    2 = replace message text with `[This message was deleted]`
+    3 = prefix message text with `[This message was deleted]`
+
+Messages deleted by oneself are always erased locally regardless of this
+setting. Deleting messages already marked deleted erases them locally.
 
 ### proxy_
 
@@ -388,13 +415,14 @@ format:
 ### use_pairing_code
 
 Stores the environment variable flag `USE_PAIRING_CODE` if set during setup.
-It specifies whether to use pairing code instead of QR code (WhatsApp only).
+It specifies whether to use pairing code / authentication code instead of
+QR code (Telegram/WhatsApp).
 
 ### use_qr_terminal
 
 Stores the environment variable flag `USE_QR_TERMINAL` if set during setup.
 It specifies whether to display QR code in the terminal, disabling detection
-of GUI capability for displaying images (WhatsApp only).
+of GUI capability for displaying images.
 
 ### version_used
 
@@ -414,6 +442,7 @@ This configuration file holds general user interface settings. Default content:
     auto_select_chat_timeout_sec=1
     call_command=
     chat_picker_sorted_alphabetically=0
+    confirm_archiving=1
     confirm_deletion=1
     confirm_send_pasted_image=1
     desktop_notify_active_current=0
@@ -423,6 +452,7 @@ This configuration file holds general user interface settings. Default content:
     desktop_notify_enabled=0
     desktop_notify_inactive=1
     downloadable_indicator=+
+    edited_indicator=✎
     emoji_enabled=1
     entry_height=4
     failed_indicator=✗
@@ -447,11 +477,13 @@ This configuration file holds general user interface settings. Default content:
     online_status_share=1
     online_status_dynamic=1
     phone_number_indicator=
+    pinned_indicator=⚲
     proxy_indicator=🔒
     read_indicator=✓
     reactions_enabled=1
     spell_check_command=
     status_broadcast=1
+    status_enabled=1
     syncing_indicator=⇄
     tab_size=4
     terminal_bell_active=0
@@ -536,6 +568,10 @@ Specifies whether the chat selection dialog (used when forwarding message)
 should be sorted alphabetically. If not, its order follows the main chat
 list order.
 
+### confirm_archiving
+
+Specifies whether to prompt the user for confirmation when archiving a chat.
+
 ### confirm_deletion
 
 Specifies whether to prompt the user for confirmation when deleting a message
@@ -587,6 +623,11 @@ terminal window is inactive.
 
 Specifies text to suffix attachment filenames in message view for attachments
 not yet downloaded. This is only shown for `attachment_prefetch` < 2.
+
+### edited_indicator
+
+Specifies text to suffix message header in message view for messages that have
+been edited.
 
 ### emoji_enabled
 
@@ -721,6 +762,11 @@ Specifies status bar text to indicate phone number of the current chat is
 available. This field may contain `%1` which will be replaced with the actual
 phone number of the contact. Other examples: `🎧`
 
+### pinned_indicator
+
+Specifies text to suffix message header in message view for messages that have
+been pinned.
+
 ### proxy_indicator
 
 Specifies top bar text to indicate proxy is enabled.
@@ -746,6 +792,10 @@ Specifies (WhatsApp) Status Updates chat level of visibility:
     0 = hidden
     1 = visible and muted  <- default
     2 = visible
+
+### status_enabled
+
+Specifies whether to display status bar.
 
 ### syncing_indicator
 
@@ -800,6 +850,7 @@ Specifies the character to suffix chats with unread messages in the chat list.
 ------------------------
 This configuration file holds user interface key bindings. Default content:
 
+    archive_chat=\33\141
     auto_compose=\33\151
     backspace=KEY_BACKSPACE
     backspace_alt=KEY_ALT_BACKSPACE
@@ -829,6 +880,7 @@ This configuration file holds user interface key bindings. Default content:
     goto_chat=KEY_CTRLN
     home=KEY_HOME
     increase_list_width=\33\56
+    jump_pinned=KEY_CTRLP
     jump_quoted=\33\161
     kill_word=
     left=KEY_LEFT
@@ -841,6 +893,7 @@ This configuration file holds user interface key bindings. Default content:
     open_msg=\33\167
     other_commands_help=KEY_CTRLO
     paste=\33\166
+    pin=\33\160
     prev_chat=KEY_BTAB
     prev_page=KEY_PPAGE
     quit=KEY_CTRLQ
@@ -849,6 +902,7 @@ This configuration file holds user interface key bindings. Default content:
     save=KEY_CTRLR
     select_contact=\33\156
     select_emoji=KEY_CTRLS
+    select_mention=\33\62
     send_msg=KEY_CTRLX
     spell=\33\44
     tab=\33\11
@@ -858,7 +912,7 @@ This configuration file holds user interface key bindings. Default content:
     toggle_emoji=KEY_CTRLY
     toggle_help=KEY_CTRLG
     toggle_list=KEY_CTRLL
-    toggle_top=KEY_CTRLP
+    toggle_top=KEY_NONE
     transfer=KEY_CTRLT
     unread_chat=KEY_CTRLF
     up=KEY_UP
@@ -965,52 +1019,48 @@ used to pick a color from the list in `~/.config/nchat/usercolor.conf`.
 
 Themes
 ------
-Example color config files are provided in `$(dirname $(which nchat))/../share/nchat/themes`
+Color themes are available in the source package under the `themes` directory
 and can be used by copying to `~/.config/nchat/`.
 
-### Default Theme
+Available themes:
 
-    cp $(dirname $(which nchat))/../share/nchat/themes/default/* ~/.config/nchat/
+    ayu-dark
+    basic-color
+    catppuccin-mocha
+    default
+    dracula
+    espresso
+    gruvbox-dark
+    gruvbox-dark-hard
+    solarized-dark-higher-contrast
+    tokyo-night
+    tomorrow-night
+    zenbones-dark
+    zenburned
 
-![screenshot nchat](/doc/screenshot-nchat.png)
+See the [Themes wiki-page](https://github.com/d99kris/nchat/wiki/Themes) for
+example screenshots.
 
-### Basic Color Theme
+### Installing theme from source
 
-    cp $(dirname $(which nchat))/../share/nchat/themes/basic-color/* ~/.config/nchat/
+With a source code copy, simply copy the theme files to the config directory
+(while nchat is not running). Example installing `dracula` theme:
 
-![screenshot nchat](/doc/screenshot-nchat-basic-color.png)
+    cp themes/dracula/* ~/.config/nchat/
 
-### Dracula Theme
+### Installing theme from web
 
-    cp $(dirname $(which nchat))/../share/nchat/themes/dracula/* ~/.config/nchat/
+One can fetch current `master` copy of a theme from the github repository and
+download to the config directory (while nchat is not running). Example
+installing `dracula` theme:
 
-![screenshot nchat](/doc/screenshot-nchat-dracula.png)
+    THEME="dracula" ; curl -L "https://raw.githubusercontent.com/d99kris/nchat/refs/heads/master/themes/${THEME}/{color.conf,usercolor.conf}" -o ~/.config/nchat/#1
 
-### iTerm2-Color-Schemes Themes
+### Generating theme from iTerm2-Color-Schemes
 
-[iTerm2 Color Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) can
-be used to generate themes for nchat. The following themes generated using
-iTerm2 Color Schemes are available in `$(dirname $(which nchat))/../share/nchat/themes`:
-
-- Catppuccin Mocha:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/catppuccin-mocha/* ~/.config/nchat/`
-- Espresso:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/espresso/* ~/.config/nchat/`
-- Gruvbox Dark:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/gruvbox-dark/* ~/.config/nchat/`
-- Solarized Dark Higher Contrast:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/solarized-dark-higher-contrast/* ~/.config/nchat/`
-- Tokyo Night:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/tokyo-night/* ~/.config/nchat/`
-- Tomorrow Night:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/tomorrow-night/* ~/.config/nchat/`
-- Zenbones Dark:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/zenbones-dark/* ~/.config/nchat/`
-- Zenburned:
-  `cp $(dirname $(which nchat))/../share/nchat/themes/zenburned/* ~/.config/nchat/`
-
-To generate additional nchat themes and install for use with `nchat`, refer to
-[Generating nchat themes from iTerm2 Color Schemes](/themes/templates/iterm2-color-schemes/README.md).
+To generate nchat themes based on
+[iTerm2 Color Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+refer to [Generating nchat themes from iTerm2 Color Schemes](/themes/templates/iterm2-color-schemes/README.md).
 
 General
 -------
@@ -1066,6 +1116,20 @@ content:
 Specifies an optional short/display name in the status bar when using nchat
 with multiple profiles. The default profile name is `WhatsAppMd` or
 `WhatsAppMd_+nnnnn` (when more than one WhatsAppMd profile is set up) if this
+setting is not specified.
+
+~/.config/nchat/profiles/Signal_+nnnnn/signal.conf
+----------------------------------------------------------
+This configuration file holds protocol-specific settings for Signal. Default
+content:
+
+    profile_display_name=
+
+### profile_display_name
+
+Specifies an optional short/display name in the status bar when using nchat
+with multiple profiles. The default profile name is `Signal` or
+`Signal_+nnnnn` (when more than one Signal profile is set up) if this
 setting is not specified.
 
 
@@ -1125,16 +1189,16 @@ after initial sync:
 
     nchat -s
 
-### 6. How to set up WhatsApp without scanning a QR code?
+### 6. How to set up Telegram / WhatsApp without scanning a QR code?
 
-By default setting up a WhatsApp account will display a QR code to be scanned
-using the WhatsApp mobile application on the primary device. As an alternative
-one can set an environment flag to have nchat display a pairing code, to be
-entered in WhatsApp on the primary device:
+By default setting up a Telegram or WhatsApp account will display a QR code
+to be scanned using the mobile application on the primary device. As an
+alternative one can set an environment flag to use authentication code
+(Telegram) or pairing code (WhatsApp) instead:
 
     USE_PAIRING_CODE=1 nchat -s
 
-### 7. No QR code is shown when setting up WhatsApp?
+### 7. No QR code is shown when setting up Telegram / WhatsApp / Signal?
 
 By default nchat will attempt to detect if the system is capable of viewing
 images using a GUI image viewer, and if detected (indicated by "has gui" in
@@ -1179,8 +1243,8 @@ There are no plans to support the following features:
 - Telegram secret chats
 - Voice / video calls
 
-Additionally, WhatsApp is only supported on macOS and glibc-based Linux
-systems. Thus, it is not supported on musl-based operating systems, such
+Additionally, WhatsApp and Signal are only supported on macOS and glibc-based
+Linux systems. Thus, it is not supported on musl-based operating systems, such
 as Alpine Linux. See [issue #204](https://github.com/d99kris/nchat/issues/204)
 for technical details on this limitation.
 
@@ -1188,9 +1252,9 @@ Roadmap
 -------
 There is currently no concrete roadmap for further feature development of
 nchat. It is not intended to be a full-featured client on par with official
-Telegram / WhatsApp clients, but rather a light-weight client providing
-essential functionality suitable for the terminal. However, feel free to
-submit feature requests if there's something missing, or help upvote
+Telegram / WhatsApp / Signal clients, but rather a light-weight client
+providing essential functionality suitable for the terminal. However, feel
+free to submit feature requests if there's something missing, or help upvote
 [existing feature requests](https://github.com/d99kris/nchat/discussions/categories/ideas?discussions_q=is%3Aopen+category%3AIdeas),
 if it's useful and low effort it will be considered.
 
@@ -1211,6 +1275,10 @@ Terminal-based Telegram clients:
 Terminal-based WhatsApp clients:
 
 - [whatscli](https://github.com/normen/whatscli)
+
+Terminal-based Signal clients:
+
+- [gurk-rs](https://github.com/boxdot/gurk-rs)
 
 
 Technical Details
@@ -1242,9 +1310,17 @@ includes the source code of the following third-party libraries:
   Copyright 2015 David Capello -
   [MIT License](/ext/clip/LICENSE.txt)
 
+- [QR-Code-generator](https://github.com/nayuki/QR-Code-generator) -
+  Copyright 2022 Project Nayuki -
+  [MIT License](/ext/QR-Code-generator/Readme.markdown)
+
 - [mautrix-signal](https://github.com/mautrix/signal) -
   Copyright 2020 Tulir Asokan -
   [AGPL License](/lib/sgchat/go/ext/signal/LICENSE)
+
+- [stb](https://github.com/nothings/stb) -
+  Copyright 2017 Sean Barrett -
+  [MIT License](/ext/stb/LICENSE)
 
 - [sqlite_modern_cpp](https://github.com/SqliteModernCpp/sqlite_modern_cpp) -
   Copyright 2017 aminroosta -
@@ -1258,8 +1334,10 @@ includes the source code of the following third-party libraries:
   Copyright 2022 Tulir Asokan -
   [MPL License](/lib/wmchat/go/ext/whatsmeow/LICENSE)
 
-The [tdlib](https://github.com/tdlib/td) and
-[whatsmeow](https://github.com/tulir/whatsmeow) libraries are actively
+The [tdlib](https://github.com/tdlib/td),
+[whatsmeow](https://github.com/tulir/whatsmeow) and
+[signal](https://github.com/mautrix/signal)
+libraries are actively
 developed and need to be updated and integrated into nchat on a regular
 basis by nchat maintainer(s). To facilitate this there are scripts available
 to update to latest (or a specific) version of these libraries. Example usages:
@@ -1267,6 +1345,8 @@ to update to latest (or a specific) version of these libraries. Example usages:
     ./utils/tdlib-update 8517026
 
     ./utils/whatsmeow-update 7aedaa1
+
+    ./utils/signal-update 93da772
 
 Code Formatting
 ---------------

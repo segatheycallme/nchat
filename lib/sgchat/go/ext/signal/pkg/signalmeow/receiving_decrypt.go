@@ -50,13 +50,10 @@ type DecryptionResult struct {
 func (cli *Client) decryptEnvelope(
 	ctx context.Context,
 	envelope *signalpb.Envelope,
+	sourceServiceID, destinationServiceID libsignalgo.ServiceID,
 ) DecryptionResult {
-	log := zerolog.Ctx(ctx)
-
-	destinationServiceID, err := libsignalgo.ServiceIDFromString(envelope.GetDestinationServiceId())
-	if err != nil {
-		log.Err(err).Str("destination_service_id", envelope.GetDestinationServiceId()).Msg("Failed to parse destination service ID")
-		return DecryptionResult{Err: fmt.Errorf("failed to parse destination service ID: %w", err)}
+	if destinationServiceID.IsEmpty() {
+		return DecryptionResult{Err: fmt.Errorf("envelope missing destination service ID")}
 	}
 
 	switch *envelope.Type {
@@ -67,17 +64,14 @@ func (cli *Client) decryptEnvelope(
 		}
 		return result
 
-	case signalpb.Envelope_PREKEY_BUNDLE, signalpb.Envelope_CIPHERTEXT:
-		sender, err := libsignalgo.NewUUIDAddressFromString(
-			*envelope.SourceServiceId,
-			uint(*envelope.SourceDevice),
-		)
+	case signalpb.Envelope_PREKEY_MESSAGE, signalpb.Envelope_DOUBLE_RATCHET:
+		sender, err := sourceServiceID.Address(uint(envelope.GetSourceDeviceId()))
 		if err != nil {
 			return DecryptionResult{Err: fmt.Errorf("failed to wrap address: %v", err)}
 		}
 		var result *DecryptionResult
 		var bundleType string
-		if *envelope.Type == signalpb.Envelope_PREKEY_BUNDLE {
+		if *envelope.Type == signalpb.Envelope_PREKEY_MESSAGE {
 			result, err = cli.prekeyDecrypt(ctx, destinationServiceID, sender, envelope.Content, envelope.GetServerTimestamp())
 			bundleType = "prekey bundle"
 		} else {
@@ -96,7 +90,7 @@ func (cli *Client) decryptEnvelope(
 		return *result
 
 	case signalpb.Envelope_PLAINTEXT_CONTENT:
-		addr, err := libsignalgo.NewUUIDAddressFromString(envelope.GetSourceServiceId(), uint(envelope.GetSourceDevice()))
+		addr, err := sourceServiceID.Address(uint(envelope.GetSourceDeviceId()))
 		if err != nil {
 			return DecryptionResult{Err: fmt.Errorf("failed to wrap address: %v", err)}
 		}
@@ -106,15 +100,12 @@ func (cli *Client) decryptEnvelope(
 		}
 		return DecryptionResult{
 			SenderAddress: addr,
-			Content:       &signalpb.Content{DecryptionErrorMessage: content},
+			Content:       &signalpb.Content{Content: &signalpb.Content_DecryptionErrorMessage{DecryptionErrorMessage: content}},
 			Unencrypted:   true,
 		}
 
 	case signalpb.Envelope_SERVER_DELIVERY_RECEIPT:
 		return DecryptionResult{Err: fmt.Errorf("server delivery receipt envelopes are not yet supported")}
-
-	case signalpb.Envelope_SENDERKEY_MESSAGE:
-		return DecryptionResult{Err: fmt.Errorf("senderkey message envelopes are not yet supported")}
 
 	case signalpb.Envelope_UNKNOWN:
 		return DecryptionResult{Err: fmt.Errorf("unknown envelope type")}
@@ -194,12 +185,17 @@ func (cli *Client) prekeyDecrypt(
 	if is == nil {
 		return nil, fmt.Errorf("no identity store found for %s", destination)
 	}
+	destinationAddress, err := destination.Address(uint(cli.Store.DeviceID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get own/destination address: %w", err)
+	}
 
 	plaintext, ciphertextHash, err := cli.bufferedDecryptTxn(ctx, encryptedContent, serverTimestamp, func(ctx context.Context) ([]byte, error) {
 		return libsignalgo.DecryptPreKey(
 			ctx,
 			preKeyMessage,
 			sender,
+			destinationAddress,
 			ss,
 			is,
 			pks,
@@ -247,11 +243,16 @@ func (cli *Client) decryptCiphertextEnvelope(
 	if identityStore == nil {
 		return nil, fmt.Errorf("no identity store for destination service ID %s", destinationServiceID)
 	}
+	destinationAddress, err := destinationServiceID.Address(uint(cli.Store.DeviceID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get own address: %w", err)
+	}
 	plaintext, ciphertextHash, err := cli.bufferedDecryptTxn(ctx, ciphertext, serverTimestamp, func(ctx context.Context) ([]byte, error) {
 		return libsignalgo.Decrypt(
 			ctx,
 			message,
 			senderAddress,
+			destinationAddress,
 			sessionStore,
 			identityStore,
 		)
@@ -400,7 +401,9 @@ func (cli *Client) decryptUnidentifiedSenderEnvelope(ctx context.Context, destin
 		}
 		result.Unencrypted = true
 		result.Content = &signalpb.Content{
-			DecryptionErrorMessage: usmcContents,
+			Content: &signalpb.Content_DecryptionErrorMessage{
+				DecryptionErrorMessage: usmcContents,
+			},
 		}
 		return result, err
 	default:

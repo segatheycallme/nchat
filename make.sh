@@ -50,7 +50,7 @@ INSTALL="0"
 SRC="0"
 BUMP="0"
 YES=""
-CMAKEARGS="${NCHAT_CMAKEARGS:-}"
+CMAKEARGS="${DEV_CMAKEARGS:-} ${NCHAT_CMAKEARGS:-}"
 
 if [[ "${#}" == "0" ]]; then
   show_usage
@@ -128,7 +128,7 @@ done
 
 # detect os / distro
 OS="$(uname)"
-if [ "${OS}" == "Linux" ]; then
+if [[ "${OS}" == "Linux" ]]; then
   unset NAME
   eval $(grep "^NAME=" /etc/os-release 2> /dev/null)
   if [[ "${NAME}" != "" ]]; then
@@ -142,7 +142,7 @@ fi
 
 # deps
 if [[ "${DEPS}" == "1" ]]; then
-  if [ "${OS}" == "Linux" ]; then
+  if [[ "${OS}" == "Linux" ]]; then
     # add wl-clipboard package for wayland systems
     WL_CLIPBOARD=$([[ "$XDG_SESSION_TYPE" == "wayland" || -n "$WAYLAND_DISPLAY" ]] && echo "wl-clipboard")
 
@@ -150,10 +150,12 @@ if [[ "${DEPS}" == "1" ]]; then
       sudo apt update && sudo apt ${YES} install ccache cmake build-essential gperf help2man libreadline-dev libssl-dev libncurses-dev libncursesw5-dev ncurses-doc zlib1g-dev libsqlite3-dev libmagic-dev ${WL_CLIPBOARD} || exiterr "deps failed (${DISTRO}), exiting."
       sudo apt ${YES} install golang-1.23 || exiterr "deps failed (${DISTRO} apt golang), exiting."
       sudo update-alternatives --install /usr/bin/go go /usr/lib/go-1.23/bin/go 123 || exiterr "deps failed (${DISTRO} select golang), exiting."
-    elif [[ "${DISTRO}" == "Debian GNU/Linux" ]]; then
+    elif [[ "${DISTRO}" == "Debian GNU/Linux" ]] || [[ "${DISTRO}" == "Devuan GNU/Linux" ]]; then
       sudo apt update && sudo apt ${YES} install ccache cmake build-essential gperf help2man libreadline-dev libssl-dev libncurses-dev libncursesw5-dev ncurses-doc zlib1g-dev libsqlite3-dev libmagic-dev ${WL_CLIPBOARD} || exiterr "deps failed (${DISTRO}), exiting."
       RELEASE=$(lsb_release -a | grep 'Codename:' | awk -F':' '{print $2}' | awk '{$1=$1;print}')
-      if [[ "${RELEASE}" == "bookworm" ]]; then
+      if [[ "${RELEASE}" == "trixie" ]] || [[ "${RELEASE}" == "excalibur" ]]; then
+        sudo apt ${YES} install golang-go || exiterr "deps failed (${DISTRO} ${RELEASE}), exiting."
+      elif [[ "${RELEASE}" == "bookworm" ]]; then
         sudo apt install ${YES} -t bookworm-backports golang-1.23
         if [[ "${?}" != "0" ]]; then
           echo "Please ensure backports are enabled, see https://backports.debian.org/Instructions/#index2h2"
@@ -164,7 +166,7 @@ if [[ "${DEPS}" == "1" ]]; then
         sudo apt ${YES} install golang || exiterr "deps failed (${DISTRO} ${RELEASE}), exiting."
       else
         echo "Unsupported ${DISTRO} version ${RELEASE}. Install golang-1.23 or newer manually, for example by running:"
-        echo "wget https://go.dev/dl/go1.24.4.linux-amd64.tar.gz && sudo tar xf go.1.24.4.linux-amd64.tar.gz -C /usr/local"
+        echo "curl -fL https://go.dev/dl/go1.24.4.linux-amd64.tar.gz | sudo tar -xz -C /usr/local"
         exiterr "deps failed (${DISTRO} ${RELEASE}), exiting."
       fi
     elif [[ "${DISTRO}" == "Raspbian GNU/Linux" ]] || [[ "${DISTRO}" == "Pop!_OS" ]]; then
@@ -198,14 +200,16 @@ if [[ "${DEPS}" == "1" ]]; then
     else
       exiterr "deps failed (unsupported linux distro ${DISTRO}), exiting."
     fi
-  elif [ "${OS}" == "Darwin" ]; then
+  elif [[ "${OS}" == "Darwin" ]]; then
     if command -v brew &> /dev/null; then
-      HOMEBREW_NO_INSTALL_UPGRADE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install go gperf cmake openssl ncurses ccache readline sqlite libmagic || exiterr "deps failed (${OS} brew), exiting."
+      HOMEBREW_NO_INSTALL_UPGRADE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install go gperf cmake openssl ncurses ccache readline sqlite libmagic 2> >(grep -vE "already installed|To reinstall|brew reinstall" >&2) || exiterr "deps failed (${OS} brew), exiting."
     elif command -v port &> /dev/null; then
       sudo port -N install go gperf cmake openssl ncurses ccache readline sqlite3 libmagic || exiterr "deps failed (${OS} port), exiting."
     else
       exiterr "deps failed (${OS} missing brew and port), exiting."
     fi
+  elif [[ "${OS}" == "OpenBSD" ]]; then
+    doas pkg_add git cmake ccache gperf sqlite3 libmagic || exiterr "deps failed (${OS}), exiting."
   else
     exiterr "deps failed (unsupported os ${OS}), exiting."
   fi
@@ -268,10 +272,12 @@ fi
 
 # make args
 if [[ "${BUILD}" == "1" ]] || [[ "${DEBUG}" == "1" ]]; then
-  if [ "${OS}" == "Linux" ]; then
+  if [[ "${OS}" == "Linux" ]]; then
     MEM="$(( $(($(getconf _PHYS_PAGES) * $(getconf PAGE_SIZE) / (1000 * 1000 * 1000))) * 1000 ))" # in MB
-  elif [ "${OS}" == "Darwin" ]; then
+  elif [[ "${OS}" == "Darwin" ]]; then
     MEM="$(( $(($(sysctl -n hw.memsize) / (1000 * 1000 * 1000))) * 1000 ))" # in MB
+  elif [[ "${OS}" == "OpenBSD" ]]; then
+    MEM="$(( $(($(sysctl -n hw.physmem) / (1000 * 1000 * 1000))) * 1000 ))" # in MB
   fi
 
   MEM_NEEDED_PER_CORE="3500" # tdlib under g++ needs 3.5 GB
@@ -284,7 +290,7 @@ if [[ "${BUILD}" == "1" ]] || [[ "${DEBUG}" == "1" ]]; then
     MEM_MAX_THREADS="1" # minimum 1 core
   fi
 
-  if [[ "${OS}" == "Darwin" ]]; then
+  if [[ "${OS}" == "Darwin" ]] || [[ "${OS}" == "OpenBSD" ]]; then
     CPU_MAX_THREADS="$(sysctl -n hw.ncpu)"
   else
     CPU_MAX_THREADS="$(nproc)"
@@ -297,6 +303,13 @@ if [[ "${BUILD}" == "1" ]] || [[ "${DEBUG}" == "1" ]]; then
   fi
 
   MAKEARGS="-j${MAX_THREADS}"
+fi
+
+# ccache zero stats
+if [[ "${BUILD}" == "1" ]] || [[ "${DEBUG}" == "1" ]]; then
+  if command -v ccache &> /dev/null; then
+    ccache -z > /dev/null
+  fi
 fi
 
 # build
@@ -314,6 +327,19 @@ if [[ "${DEBUG}" == "1" ]]; then
   mkdir -p dbgbuild && cd dbgbuild && cmake ${CMAKEARGS} .. && make -s ${MAKEARGS} && cd .. || exiterr "debug build failed, exiting."
 fi
 
+# ccache stats
+if [[ "${BUILD}" == "1" ]] || [[ "${DEBUG}" == "1" ]]; then
+  if command -v ccache &> /dev/null; then
+    CCACHE_STATS="$(ccache -s)"
+    HITS="$(echo "${CCACHE_STATS}" | grep "Hits:" | head -1 | awk '{print $2}')"
+    MISSES="$(echo "${CCACHE_STATS}" | grep "Misses:" | head -1 | awk '{print $2}')"
+    TOTAL="$(echo "${CCACHE_STATS}" | grep "Hits:" | head -1 | awk '{print $4}')"
+    if [[ -n "${HITS}" ]]; then
+      echo "-- Ccache stats: ${HITS} hits, ${MISSES} misses, ${TOTAL} total."
+    fi
+  fi
+fi
+
 # tests
 if [[ "${TESTS}" == "1" ]]; then
   true || exiterr "tests failed, exiting."
@@ -327,7 +353,7 @@ if [[ "${DOC}" == "1" ]]; then
     else
       SED="sed -i"
     fi
-    help2man -n "ncurses chat" -N -o src/nchat.1 ./build/bin/nchat && ${SED} "s/\.\\\\\" DO NOT MODIFY THIS FILE\!  It was generated by help2man.*/\.\\\\\" DO NOT MODIFY THIS FILE\!  It was generated by help2man./g" src/nchat.1 || exiterr "doc failed, exiting."
+    help2man -n "ncurses chat" -N -o src/nchat.1 ./build/bin/nchat && ${SED} "s/\.\\\\\" DO NOT MODIFY THIS FILE\!  It was generated by help2man.*/\.\\\\\" DO NOT MODIFY THIS FILE\!  It was generated by help2man./g" src/nchat.1 && ${SED} "s/^Combined distribution subject to.*/License varies by build configuration.\n.br\nSee \`nchat \-\-version\` for details./g" src/nchat.1 || exiterr "doc failed, exiting."
   fi
 fi
 
@@ -342,11 +368,19 @@ if [[ "${INSTALL}" == "1" ]]; then
       if [[ "${GITHUB_ACTIONS}" == "true" ]]; then
         INSTALL_CMD="sudo"
       fi
+    elif [[ "${OS}" == "OpenBSD" ]]; then
+      INSTALL_CMD="doas"
     fi
   fi
 
-  echo "-- Using ${INSTALL_CMD:+$INSTALL_CMD }make install"
-  cd build && ${INSTALL_CMD} make install && cd .. || exiterr "install failed (${OS}), exiting."
+  # check if we are already root
+  if [ "$EUID" -ne 0 ]; then
+    echo "-- Using ${INSTALL_CMD:+$INSTALL_CMD }make install"
+    cd build && ${INSTALL_CMD} make install && cd .. || exiterr "install failed (${OS}), exiting."
+  else
+    echo "-- Using make install"
+    cd build && make install && cd .. || exiterr "install failed (${OS}), exiting."
+  fi
 fi
 
 # exit

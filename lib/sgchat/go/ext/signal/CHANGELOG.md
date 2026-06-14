@@ -1,3 +1,39 @@
+# v26.05
+
+* Updated libsignal to v0.93.2.
+* Added support for importing sticker packs from Signal.
+
+# v26.04
+
+* Updated libsignal to v0.92.1.
+* Added support for admin message deletes from Signal.
+* Added support for binary service IDs in storage service.
+* Fixed `private_chat_portal_meta` option not setting DM room names correctly.
+* Fixed panic if user is logged out during initial chat sync.
+* Fixed avatar upload failing when creating new Signal group.
+
+# v26.03
+
+* Switched to sending binary service ID fields in outgoing messages.
+* Added support for roundtripping large attachments via disk to avoid keeping
+  the entire file in memory during en/decryption.
+
+# v26.02.2
+
+* Added support for more new binary service ID fields.
+
+# v26.02.1
+
+* Updated libsignal to v0.87.5.
+* Added support for new binary service ID fields that Signal 8.0 switched to.
+
+# v26.02
+
+* Bumped minimum Go version to 1.25.
+* Updated libsignal to v0.87.1.
+* Added automatic recovery for the session not found error from libsignal.
+* Fixed sender key state not being cleared on logout properly.
+
 # v26.01
 
 * Updated libsignal to v0.86.12.

@@ -140,7 +140,9 @@ message ContactRecord {
   Name          nickname                = 22;
   string        note                    = 23;
   optional AvatarColor avatarColor      = 24;
-  // Next ID: 25
+  bytes         aciBinary               = 25; // 16-byte UUID
+  bytes         pniBinary               = 26; // 16-byte UUID
+  // Next ID: 27
 }
 
 message GroupV1Record {
@@ -170,6 +172,7 @@ message GroupV2Record {
   reserved   /* storySendEnabled */            9;
   StorySendMode storySendMode                = 10;
   optional AvatarColor avatarColor           = 11;
+  bytes         verifiedNameHash             = 12; // SHA-256 of UTF-8 encoded decrypted group title that was last verified
 }
 
 message Payments {
@@ -187,8 +190,9 @@ message AccountRecord {
 
   message PinnedConversation {
     message Contact {
-      string serviceId = 1;
-      string e164      = 2;
+      string serviceId       = 1;
+      string e164            = 2;
+      bytes  serviceIdBinary = 3; // service ID binary (i.e. 16 byte UUID for ACI, 1 byte prefix + 16 byte UUID for PNI)
     }
 
     oneof identifier {
@@ -291,28 +295,33 @@ message AccountRecord {
   optional AvatarColor                       avatarColor                                = 42;
            BackupTierHistory                 backupTierHistory                          = 43;
            NotificationProfileManualOverride notificationProfileManualOverride          = 44;
+           bool                              notificationProfileSyncDisabled            = 45;
+           bool                              automaticKeyVerificationDisabled           = 46;
+           bool                              hasSeenAdminDeleteEducationDialog          = 47;
 }
 
 message StoryDistributionListRecord {
-           bytes  identifier          = 1;
-           string name                = 2;
-  repeated string recipientServiceIds = 3;
-           uint64 deletedAtTimestamp  = 4;
-           bool   allowsReplies       = 5;
-           bool   isBlockList         = 6;
+           bytes  identifier                = 1;
+           string name                      = 2;
+  repeated string recipientServiceIds       = 3;
+           uint64 deletedAtTimestamp        = 4;
+           bool   allowsReplies             = 5;
+           bool   isBlockList               = 6;
+  repeated bytes  recipientServiceIdsBinary = 7; // service ID binary (i.e. 16 byte UUID for ACI, 1 byte prefix + 16 byte UUID for PNI)
 }
 
 message CallLinkRecord {
   bytes rootKey               = 1;
   bytes adminPasskey          = 2;
   uint64 deletedAtTimestampMs = 3;
-  optional bytes epoch        = 4;
+  reserved                      4; // was epoch field, never used
 }
 
 message Recipient {
   message Contact {
-    string serviceId = 1;
-    string e164      = 2;
+    string serviceId      = 1;
+    string e164           = 2;
+    bytes serviceIdBinary = 3; // service ID binary (i.e. 16 byte UUID for ACI, 1 byte prefix + 16 byte UUID for PNI)
   }
 
   oneof identifier {

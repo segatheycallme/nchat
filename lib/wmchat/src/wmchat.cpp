@@ -1,6 +1,6 @@
 // wmchat.cpp
 //
-// Copyright (c) 2020-2025 Kristofer Berggren
+// Copyright (c) 2020-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -62,8 +62,18 @@ bool WmChat::HasFeature(ProtocolFeature p_ProtocolFeature) const
 {
   static int customFeatures =
     FeatureEditMessagesWithinFifteenMins |
-    FeatureAutoGetContactsOnLogin;
+    FeatureAutoGetContactsOnLogin |
+    FeaturePinChat |
+    FeatureArchiveChat;
   return (p_ProtocolFeature & customFeatures);
+}
+
+bool WmChat::IsGroupChat(const std::string& p_ChatId) const
+{
+  // WhatsApp group JIDs end with @g.us
+  static const std::string groupSuffix = "@g.us";
+  return (p_ChatId.size() > groupSuffix.size() &&
+          p_ChatId.compare(p_ChatId.size() - groupSuffix.size(), groupSuffix.size(), groupSuffix) == 0);
 }
 
 std::string WmChat::GetSelfId() const
@@ -93,7 +103,7 @@ bool WmChat::SetupProfile(const std::string& p_ProfilesDir, std::string& p_Profi
   p_ProfileId = m_ProfileId;
 
   std::string proxyUrl = GetProxyUrl();
-  int32_t sendType = AppConfig::GetBool("attachment_send_type") ? 1 : 0;
+  int32_t sendType = AppConfig::GetNum("attachment_send_type");
   int connId = CWmInit(const_cast<char*>(profileDir.c_str()), const_cast<char*>(proxyUrl.c_str()), sendType);
   if (connId == -1)
   {
@@ -142,7 +152,7 @@ bool WmChat::LoadProfile(const std::string& p_ProfilesDir, const std::string& p_
   }
 
   std::string proxyUrl = GetProxyUrl();
-  int32_t sendType = AppConfig::GetBool("attachment_send_type") ? 1 : 0;
+  int32_t sendType = AppConfig::GetNum("attachment_send_type");
   m_ConnId = CWmInit(const_cast<char*>(m_ProfileDir.c_str()), const_cast<char*>(proxyUrl.c_str()), sendType);
   if (m_ConnId == -1) return false;
 
@@ -390,12 +400,14 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
           fileType = fileInfo.fileType;
         }
 
+        std::string mentionsJson = ProtocolUtil::MentionsToJson(sendMessageRequest->chatMessage.mentions);
+
         int rv =
           CWmSendMessage(m_ConnId, const_cast<char*>(chatId.c_str()), const_cast<char*>(text.c_str()),
                          const_cast<char*>(quotedId.c_str()), const_cast<char*>(quotedText.c_str()),
                          const_cast<char*>(quotedSender.c_str()), const_cast<char*>(filePath.c_str()),
                          const_cast<char*>(fileType.c_str()), const_cast<char*>(editMsgId.c_str()),
-                         editMsgSent);
+                         editMsgSent, const_cast<char*>(mentionsJson.c_str()));
         Status::Clear(m_ProfileId, Status::FlagSending);
 
         std::shared_ptr<SendMessageNotify> sendMessageNotify = std::make_shared<SendMessageNotify>(m_ProfileId);
@@ -429,11 +441,13 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
           fileType = fileInfo.fileType;
         }
 
+        std::string editMentionsJson = ProtocolUtil::MentionsToJson(editMessageRequest->chatMessage.mentions);
+
         CWmSendMessage(m_ConnId, const_cast<char*>(chatId.c_str()), const_cast<char*>(text.c_str()),
                        const_cast<char*>(quotedId.c_str()), const_cast<char*>(quotedText.c_str()),
                        const_cast<char*>(quotedSender.c_str()), const_cast<char*>(filePath.c_str()),
                        const_cast<char*>(fileType.c_str()), const_cast<char*>(editMsgId.c_str()),
-                       editMsgSent);
+                       editMsgSent, const_cast<char*>(editMentionsJson.c_str()));
         Status::Clear(m_ProfileId, Status::FlagSending);
       }
       break;
@@ -479,6 +493,7 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         deleteMessageNotify->success = true; // ignore actual result, as message may have been deleted on server already
         deleteMessageNotify->chatId = deleteMessageRequest->chatId;
         deleteMessageNotify->msgId = deleteMessageRequest->msgId;
+        deleteMessageNotify->isOutgoing = true;
         CallMessageHandler(deleteMessageNotify);
       }
       break;
@@ -498,6 +513,34 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         deleteChatNotify->success = true; // to allow deleting "ghost" chats only existing locally
         deleteChatNotify->chatId = deleteChatRequest->chatId;
         CallMessageHandler(deleteChatNotify);
+      }
+      break;
+
+    case ArchiveChatRequestType:
+      {
+        LOG_DEBUG("archive chat");
+        Status::Set(m_ProfileId, Status::FlagUpdating);
+        std::shared_ptr<ArchiveChatRequest> archiveChatRequest =
+          std::static_pointer_cast<ArchiveChatRequest>(p_RequestMessage);
+        std::string chatId = archiveChatRequest->chatId;
+        int32_t isArchived = archiveChatRequest->isArchived ? 1 : 0;
+
+        CWmArchiveChat(m_ConnId, const_cast<char*>(chatId.c_str()), isArchived);
+        Status::Clear(m_ProfileId, Status::FlagUpdating);
+      }
+      break;
+
+    case PinChatRequestType:
+      {
+        LOG_DEBUG("pin chat");
+        Status::Set(m_ProfileId, Status::FlagUpdating);
+        std::shared_ptr<PinChatRequest> pinChatRequest =
+          std::static_pointer_cast<PinChatRequest>(p_RequestMessage);
+        std::string chatId = pinChatRequest->chatId;
+        int32_t isPinned = pinChatRequest->isPinned ? 1 : 0;
+
+        CWmPinChat(m_ConnId, const_cast<char*>(chatId.c_str()), isPinned);
+        Status::Clear(m_ProfileId, Status::FlagUpdating);
       }
       break;
 
@@ -625,7 +668,18 @@ void WmChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
                                   findMessageRequest->fromMsgId,
                                   findMessageRequest->lastMsgId,
                                   findMessageRequest->findText,
-                                  findMessageRequest->findMsgId);
+                                  findMessageRequest->findMsgId,
+                                  findMessageRequest->findPinned);
+      }
+      break;
+
+    case GetGroupMembersRequestType:
+      {
+        LOG_DEBUG("get group members");
+        std::shared_ptr<GetGroupMembersRequest> getGroupMembersRequest =
+          std::static_pointer_cast<GetGroupMembersRequest>(p_RequestMessage);
+        std::string chatId = getGroupMembersRequest->chatId;
+        CWmGetGroupMembers(m_ConnId, const_cast<char*>(chatId.c_str()));
       }
       break;
 
@@ -788,7 +842,7 @@ void WmNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Pho
 }
 
 void WmNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMuted, int p_IsPinned,
-                      int p_LastMessageTime)
+                      int p_IsArchived, int p_LastMessageTime)
 {
   WmChat* instance = WmChat::GetInstance(p_ConnId);
   if (instance != nullptr)
@@ -799,6 +853,7 @@ void WmNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMute
     chatInfo.isUnreadMention = false; // not supported in wa
     chatInfo.isMuted = (p_IsMuted == 1);
     chatInfo.isPinned = (p_IsPinned == 1);
+    chatInfo.isArchived = (p_IsArchived == 1);
     chatInfo.lastMessageTime = ((int64_t)p_LastMessageTime) * 1000;
 
     std::shared_ptr<NewChatsNotify> newChatsNotify = std::make_shared<NewChatsNotify>(instance->GetProfileId());
@@ -811,6 +866,28 @@ void WmNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMute
   }
 
   free(p_ChatId);
+}
+
+void WmNewGroupMembersNotify(int p_ConnId, char* p_ChatId, char* p_MembersJson)
+{
+  WmChat* instance = WmChat::GetInstance(p_ConnId);
+  if (instance != nullptr)
+  {
+    std::shared_ptr<NewGroupMembersNotify> notify =
+      std::make_shared<NewGroupMembersNotify>(instance->GetProfileId());
+    notify->chatId = std::string(p_ChatId);
+
+    // Parse JSON array of {id, name} objects
+    std::string json = std::string(p_MembersJson);
+    notify->contactInfos = ProtocolUtil::ContactInfosFromJson(json);
+
+    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+    deferNotifyRequest->serviceMessage = notify;
+    instance->SendRequest(deferNotifyRequest);
+  }
+
+  free(p_ChatId);
+  free(p_MembersJson);
 }
 
 void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe,
@@ -828,6 +905,7 @@ void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_Se
     chatMessage.quotedId = std::string(p_QuotedId);
     chatMessage.timeSent = (((int64_t)p_TimeSent) * 1000) + (std::hash<std::string>{ }(chatMessage.id) % 256);
     chatMessage.isRead = (p_IsRead == 1);
+    chatMessage.isEdited = (p_IsEdited == 1);
 
     if (p_IsEdited)
     {
@@ -835,9 +913,10 @@ void WmNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_Se
       if (MessageCache::GetOneMessage(instance->GetProfileId(), std::string(p_ChatId), std::string(p_MsgId),
                                       chatMessages))
       {
-        // retain original sent time and file info
+        // retain original sent time, file info, and read state
         chatMessage.timeSent = chatMessages.at(0).timeSent;
         chatMessage.fileInfo = chatMessages.at(0).fileInfo;
+        chatMessage.isRead = chatMessages.at(0).isRead;
       }
     }
     else
@@ -944,6 +1023,26 @@ void WmNewMessageStatusNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p
   free(p_MsgId);
 }
 
+void WmNewMessageIsPinnedNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsPinned)
+{
+  WmChat* instance = WmChat::GetInstance(p_ConnId);
+  if (instance != nullptr)
+  {
+    std::shared_ptr<NewMessageIsPinnedNotify> newMessageIsPinnedNotify =
+      std::make_shared<NewMessageIsPinnedNotify>(instance->GetProfileId());
+    newMessageIsPinnedNotify->chatId = std::string(p_ChatId);
+    newMessageIsPinnedNotify->msgId = std::string(p_MsgId);
+    newMessageIsPinnedNotify->isPinned = (p_IsPinned == 1);
+
+    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+    deferNotifyRequest->serviceMessage = newMessageIsPinnedNotify;
+    instance->SendRequest(deferNotifyRequest);
+  }
+
+  free(p_ChatId);
+  free(p_MsgId);
+}
+
 void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FilePath, int p_FileStatus,
                             int p_Action)
 {
@@ -1021,7 +1120,7 @@ void WmDeleteChatNotify(int p_ConnId, char* p_ChatId)
   free(p_ChatId);
 }
 
-void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
+void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsOutgoing)
 {
   return;
   free(p_ChatId);
@@ -1031,8 +1130,10 @@ void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
   if (instance != nullptr)
   {
     static const int messageDelete = AppConfig::GetNum("message_delete");
+    const bool isOutgoing = (p_IsOutgoing != 0);
 
-    if ((messageDelete == MessageDeleteReplace) || (messageDelete == MessageDeletePrefix))
+    if (!isOutgoing &&
+        ((messageDelete == MessageDeleteReplace) || (messageDelete == MessageDeletePrefix)))
     {
       std::vector<ChatMessage> chatMessages;
       if (MessageCache::GetOneMessage(instance->GetProfileId(), std::string(p_ChatId), std::string(p_MsgId),
@@ -1040,16 +1141,18 @@ void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
       {
         ChatMessage chatMessage = chatMessages.front();
         chatMessage.isRead = true;
+        chatMessage.isDeleted = true;
 
         if (messageDelete == MessageDeleteReplace)
         {
-          chatMessage.text = std::string("[Deleted]");
+          chatMessage.text = std::string("[This message was deleted]");
+          chatMessage.fileInfo.clear();
         }
-        else
+        else // MessageDeletePrefix
         {
-          if (!StrUtil::StartsWith(chatMessage.text, "[Deleted]"))
+          if (!StrUtil::StartsWith(chatMessage.text, "[This message was deleted]"))
           {
-            chatMessage.text = std::string("[Deleted]\n") + chatMessage.text;
+            chatMessage.text = std::string("[This message was deleted]\n") + chatMessage.text;
           }
         }
 
@@ -1067,13 +1170,14 @@ void WmDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
         instance->SendRequest(deferNotifyRequest);
       }
     }
-    else // (messageDelete == MessageDeleteErase)
+    else // erase: mode 1, or any self-deletion
     {
       std::shared_ptr<DeleteMessageNotify> deleteMessageNotify =
         std::make_shared<DeleteMessageNotify>(instance->GetProfileId());
       deleteMessageNotify->success = true;
       deleteMessageNotify->chatId = std::string(p_ChatId);
       deleteMessageNotify->msgId = std::string(p_MsgId);
+      deleteMessageNotify->isOutgoing = isOutgoing;
 
       std::shared_ptr<DeferNotifyRequest> deferNotifyRequest =
         std::make_shared<DeferNotifyRequest>();
@@ -1100,6 +1204,26 @@ void WmUpdateMuteNotify(int p_ConnId, char* p_ChatId, int p_IsMuted)
     std::shared_ptr<DeferNotifyRequest> deferNotifyRequest =
       std::make_shared<DeferNotifyRequest>();
     deferNotifyRequest->serviceMessage = updateMuteNotify;
+    instance->SendRequest(deferNotifyRequest);
+  }
+
+  free(p_ChatId);
+}
+
+void WmUpdateArchivedNotify(int p_ConnId, char* p_ChatId, int p_IsArchived)
+{
+  WmChat* instance = WmChat::GetInstance(p_ConnId);
+  if (instance != nullptr)
+  {
+    std::shared_ptr<UpdateArchivedNotify> updateArchivedNotify =
+      std::make_shared<UpdateArchivedNotify>(instance->GetProfileId());
+    updateArchivedNotify->success = true;
+    updateArchivedNotify->chatId = std::string(p_ChatId);
+    updateArchivedNotify->isArchived = p_IsArchived;
+
+    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest =
+      std::make_shared<DeferNotifyRequest>();
+    deferNotifyRequest->serviceMessage = updateArchivedNotify;
     instance->SendRequest(deferNotifyRequest);
   }
 

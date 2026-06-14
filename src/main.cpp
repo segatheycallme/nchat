@@ -7,14 +7,15 @@
 
 #include <iostream>
 #include <map>
+#include <memory>
 #include <regex>
 #include <set>
 #include <string>
 
 #include <cassert>
 #include <dlfcn.h>
-
-#include <path.hpp>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "appconfig.h"
 #include "apputil.h"
@@ -25,6 +26,7 @@
 #include "profiles.h"
 #include "scopeddirlock.h"
 #include "status.h"
+#include "strutil.h"
 #include "sysutil.h"
 #include "ui.h"
 
@@ -210,7 +212,7 @@ int main(int argc, char* argv[])
 
   bool isDirInited = false;
   static const int dirVersion = 1;
-  if (!apathy::Path(FileUtil::GetApplicationDir()).exists())
+  if (!FileUtil::Exists(FileUtil::GetApplicationDir()))
   {
     FileUtil::InitDirVersion(FileUtil::GetApplicationDir(), dirVersion);
     isDirInited = true;
@@ -330,10 +332,10 @@ int main(int argc, char* argv[])
 
   // Load profile(s)
   std::string profilesDir = FileUtil::GetApplicationDir() + "/profiles";
-  const std::vector<apathy::Path>& profilePaths = apathy::Path::listdir(profilesDir);
-  for (auto& profilePath : profilePaths)
+  const std::vector<std::string>& profileNames = FileUtil::ListDirNames(profilesDir);
+  std::vector<std::unique_ptr<ScopedDirLock>> profileDirLocks;
+  for (auto& profileId : profileNames)
   {
-    std::string profileId = profilePath.filename();
     if (profileId == "version") continue;
 
     std::stringstream ss(profileId);
@@ -351,6 +353,16 @@ int main(int argc, char* argv[])
       continue;
     }
 #endif
+
+    std::string profileDir = profilesDir + "/" + profileId;
+    profileDirLocks.push_back(std::make_unique<ScopedDirLock>(profileDir));
+    if (!profileDirLocks.back()->IsLocked())
+    {
+      LOG_WARNING("unable to acquire lock for %s, skipping", profileDir.c_str());
+      std::cerr << "warning: unable to acquire lock for " << profileDir << ", skipping.\n";
+      profileDirLocks.pop_back();
+      continue;
+    }
 
     if (setupProtocol && (setupProtocol->GetProfileId() == profileId))
     {
@@ -474,34 +486,32 @@ int main(int argc, char* argv[])
 
 std::string GetFeatures()
 {
-  std::string features =
+  std::vector<std::string> features;
 #if defined(HAS_TELEGRAM)
-    "telegram on, "
-#else
-    "telegram off, "
+  features.push_back("telegram");
 #endif
 
 #if defined(HAS_WHATSAPP)
-    "whatsapp on"
-#else
-    "whatsapp off"
+  features.push_back("whatsapp");
 #endif
-  ;
 
-  return features;
+#if defined(HAS_SIGNAL)
+  features.push_back("signal");
+#endif
+
+  return StrUtil::Join(features, ", ");
 }
 
 void RemoveProfile()
 {
   // Show profiles
   std::string profilesDir = FileUtil::GetApplicationDir() + "/profiles";
-  const std::vector<apathy::Path>& profilePaths = apathy::Path::listdir(profilesDir);
+  const std::vector<std::string>& profileNames = FileUtil::ListDirNames(profilesDir);
   int id = 0;
   std::map<int, std::string> idPath;
   std::cout << "Remove profile:\n";
-  for (auto& profilePath : profilePaths)
+  for (auto& profileId : profileNames)
   {
-    std::string profileId = profilePath.filename();
     if (profileId == "version") continue;
 
     std::stringstream ss(profileId);
@@ -513,7 +523,7 @@ void RemoveProfile()
     }
 
     std::cout << id << ". " << profileId << "\n";
-    idPath[id++] = profilePath.string();
+    idPath[id++] = profilesDir + "/" + profileId;
   }
 
   std::cout << id << ". Cancel removal\n";
@@ -649,10 +659,13 @@ void ShowHelp()
     "    Ctrl-x      send message\n"
     "    Ctrl-y      toggle show emojis\n"
     "    KeyUp       select message\n"
+    "    Alt-@       insert mention\n"
+    "    Alt-a       archive current chat\n"
     "    Alt-d       delete/leave current chat\n"
     "    Alt-e       external editor compose\n"
     "    Alt-i       auto-compose reply\n"
     "    Alt-n       search contacts\n"
+    "    Alt-p       pin/unpin current chat\n"
     "    Alt-t       external telephone call\n"
     "    Alt-/       find in chat\n"
     "    Alt-?       find next in chat\n"
@@ -693,6 +706,7 @@ void ShowHelp()
 
 void ShowVersion()
 {
+  // *INDENT-OFF*
   std::cout <<
     AppUtil::GetAppName(true /*p_WithVersion*/) << "\n"
     "\n"
@@ -705,4 +719,5 @@ void ShowVersion()
 #endif
     "\n"
     "Written by Kristofer Berggren.\n";
+  // *INDENT-ON*
 }

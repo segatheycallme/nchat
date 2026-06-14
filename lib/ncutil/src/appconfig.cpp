@@ -53,6 +53,7 @@ void AppConfig::Cleanup()
   m_Config.reset();
 }
 
+
 bool AppConfig::GetBool(const std::string& p_Param)
 {
   return m_Config->Get(p_Param) == "1";

@@ -60,9 +60,9 @@ func (mc *MessageConverter) ToSignal(
 		authorACI, messageID, err := signalid.ParseMessageID(replyTo.ID)
 		if err == nil {
 			dm.Quote = &signalpb.DataMessage_Quote{
-				Id:        proto.Uint64(messageID),
-				AuthorAci: proto.String(authorACI.String()),
-				Type:      signalpb.DataMessage_Quote_NORMAL.Enum(),
+				Id:              proto.Uint64(messageID),
+				AuthorAciBinary: authorACI[:],
+				Type:            signalpb.DataMessage_Quote_NORMAL.Enum(),
 			}
 			if replyTo.Metadata.(*signalid.MessageMetadata).ContainsAttachments {
 				dm.Quote.Attachments = make([]*signalpb.DataMessage_Quote_QuotedAttachment, 1)
@@ -110,21 +110,24 @@ func (mc *MessageConverter) ToSignal(
 			return nil, fmt.Errorf("failed to convert sticker: %w", err)
 		}
 		att.Flags = proto.Uint32(uint32(signalpb.AttachmentPointer_BORDERLESS))
-		var emoji *string
-		// TODO check for single grapheme cluster?
-		if len([]rune(content.Body)) == 1 {
-			emoji = proto.String(variationselector.Remove(content.Body))
-		}
-		dm.Sticker = &signalpb.DataMessage_Sticker{
-			// Signal iOS validates that pack id/key are of the correct length.
-			// Android is fine with any non-nil values (like a zero-length byte string).
-			PackId:    make([]byte, 16),
-			PackKey:   make([]byte, 32),
-			StickerId: proto.Uint32(0),
 
-			Data:  att,
-			Emoji: emoji,
+		dm.Sticker = ParseStickerMeta(content.Info.BridgedSticker)
+		if dm.Sticker == nil {
+			var emoji *string
+			// TODO check for single grapheme cluster?
+			if len([]rune(content.Body)) == 1 {
+				emoji = proto.String(variationselector.Remove(content.Body))
+			}
+			dm.Sticker = &signalpb.DataMessage_Sticker{
+				// Signal iOS validates that pack id/key are of the correct length.
+				// Android is fine with any non-nil values (like a zero-length byte string).
+				PackId:    make([]byte, 16),
+				PackKey:   make([]byte, 32),
+				StickerId: proto.Uint32(0),
+				Emoji:     emoji,
+			}
 		}
+		dm.Sticker.Data = att
 	case event.MsgLocation:
 		lat, lon, err := parseGeoURI(content.GeoURI)
 		if err != nil {

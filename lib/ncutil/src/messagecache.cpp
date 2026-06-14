@@ -1,6 +1,6 @@
 // messagecache.cpp
 //
-// Copyright (c) 2020-2025 Kristofer Berggren
+// Copyright (c) 2020-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -164,6 +164,16 @@ void MessageCache::AddFromServiceMessage(const std::string& p_ProfileId,
       }
       break;
 
+    case NewMessageIsPinnedNotifyType:
+      {
+        std::shared_ptr<NewMessageIsPinnedNotify> newMessageIsPinnedNotify =
+          std::static_pointer_cast<NewMessageIsPinnedNotify>(p_ServiceMessage);
+        MessageCache::UpdateMessageIsPinned(p_ProfileId, newMessageIsPinnedNotify->chatId,
+                                            newMessageIsPinnedNotify->msgId,
+                                            newMessageIsPinnedNotify->isPinned);
+      }
+      break;
+
     case NewMessageFileNotifyType:
       {
         std::shared_ptr<NewMessageFileNotify> newMessageFileNotify =
@@ -201,6 +211,42 @@ void MessageCache::AddFromServiceMessage(const std::string& p_ProfileId,
         {
           MessageCache::UpdatePin(p_ProfileId, updatePinNotify->chatId, updatePinNotify->isPinned,
                                   updatePinNotify->timePinned);
+        }
+      }
+      break;
+
+    case UpdateArchivedNotifyType:
+      {
+        std::shared_ptr<UpdateArchivedNotify> updateArchivedNotify = std::static_pointer_cast<UpdateArchivedNotify>(
+          p_ServiceMessage);
+        if (updateArchivedNotify->success)
+        {
+          MessageCache::UpdateArchived(p_ProfileId, updateArchivedNotify->chatId, updateArchivedNotify->isArchived);
+        }
+      }
+      break;
+
+    case NewGroupMembersNotifyType:
+      {
+        std::shared_ptr<NewGroupMembersNotify> newGroupMembersNotify =
+          std::static_pointer_cast<NewGroupMembersNotify>(p_ServiceMessage);
+        std::vector<std::string> memberIds;
+        for (const auto& ci : newGroupMembersNotify->contactInfos)
+        {
+          memberIds.push_back(ci.id);
+        }
+        MessageCache::AddGroupMembers(p_ProfileId, newGroupMembersNotify->chatId, memberIds);
+        std::vector<ContactInfo> namedContacts;
+        for (const auto& ci : newGroupMembersNotify->contactInfos)
+        {
+          if (!ci.name.empty())
+          {
+            namedContacts.push_back(ci);
+          }
+        }
+        if (!namedContacts.empty())
+        {
+          MessageCache::AddContacts(p_ProfileId, false /*p_FullSync*/, namedContacts);
         }
       }
       break;
@@ -379,7 +425,65 @@ void MessageCache::AddProfile(const std::string& p_ProfileId, bool p_CheckSequen
         "SET schema = ?;" << schemaVersion;
     }
 
-    static const int64_t s_SchemaVersion = 7;
+    if (schemaVersion == 7)
+    {
+      LOG_INFO("update db schema 7 to 8");
+
+      *m_Dbs[p_ProfileId] << "CREATE TABLE IF NOT EXISTS groupmembers ("
+        "chatId TEXT,"
+        "memberId TEXT"
+        ");";
+
+      schemaVersion = 8;
+      *m_Dbs[p_ProfileId] << "UPDATE version "
+        "SET schema = ?;" << schemaVersion;
+    }
+
+    if (schemaVersion == 8)
+    {
+      LOG_INFO("update db schema 8 to 9");
+
+      *m_Dbs[p_ProfileId] << "ALTER TABLE chats2 ADD COLUMN isArchived INT;";
+
+      schemaVersion = 9;
+      *m_Dbs[p_ProfileId] << "UPDATE version "
+        "SET schema = ?;" << schemaVersion;
+    }
+
+    if (schemaVersion == 9)
+    {
+      LOG_INFO("update db schema 9 to 10");
+
+      *m_Dbs[p_ProfileId] << "ALTER TABLE messages ADD COLUMN isEdited INT DEFAULT 0;";
+
+      schemaVersion = 10;
+      *m_Dbs[p_ProfileId] << "UPDATE version "
+        "SET schema = ?;" << schemaVersion;
+    }
+
+    if (schemaVersion == 10)
+    {
+      LOG_INFO("update db schema 10 to 11");
+
+      *m_Dbs[p_ProfileId] << "ALTER TABLE messages ADD COLUMN isDeleted INT DEFAULT 0;";
+
+      schemaVersion = 11;
+      *m_Dbs[p_ProfileId] << "UPDATE version "
+        "SET schema = ?;" << schemaVersion;
+    }
+
+    if (schemaVersion == 11)
+    {
+      LOG_INFO("update db schema 11 to 12");
+
+      *m_Dbs[p_ProfileId] << "ALTER TABLE messages ADD COLUMN isPinned INT DEFAULT 0;";
+
+      schemaVersion = 12;
+      *m_Dbs[p_ProfileId] << "UPDATE version "
+        "SET schema = ?;" << schemaVersion;
+    }
+
+    static const int64_t s_SchemaVersion = 12;
     if (schemaVersion > s_SchemaVersion)
     {
       LOG_WARNING("cache db schema %d from newer nchat version detected, if cache issues are encountered "
@@ -632,7 +736,8 @@ bool MessageCache::GetOneMessage(const std::string& p_ProfileId, const std::stri
 
 void MessageCache::FindMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
                                const std::string& p_FromMsgId, const std::string& p_LastMsgId,
-                               const std::string& p_FindText, const std::string& p_FindMsgId)
+                               const std::string& p_FindText, const std::string& p_FindMsgId,
+                               bool p_FindPinned)
 {
   if (!m_CacheEnabled) return;
 
@@ -644,6 +749,7 @@ void MessageCache::FindMessage(const std::string& p_ProfileId, const std::string
   findCachedMessageRequest->lastMsgId = p_LastMsgId;
   findCachedMessageRequest->findText = p_FindText;
   findCachedMessageRequest->findMsgId = p_FindMsgId;
+  findCachedMessageRequest->findPinned = p_FindPinned;
   EnqueueRequest(findCachedMessageRequest);
 }
 
@@ -669,6 +775,20 @@ void MessageCache::DeleteChat(const std::string& p_ProfileId, const std::string&
   deleteChatRequest->profileId = p_ProfileId;
   deleteChatRequest->chatId = p_ChatId;
   EnqueueRequest(deleteChatRequest);
+}
+
+void MessageCache::UpdateMessageIsPinned(const std::string& p_ProfileId, const std::string& p_ChatId,
+                                         const std::string& p_MsgId, bool p_IsPinned)
+{
+  if (!m_CacheEnabled) return;
+
+  std::shared_ptr<UpdateMessageIsPinnedRequest> updateIsPinnedRequest =
+    std::make_shared<UpdateMessageIsPinnedRequest>();
+  updateIsPinnedRequest->profileId = p_ProfileId;
+  updateIsPinnedRequest->chatId = p_ChatId;
+  updateIsPinnedRequest->msgId = p_MsgId;
+  updateIsPinnedRequest->isPinned = p_IsPinned;
+  EnqueueRequest(updateIsPinnedRequest);
 }
 
 void MessageCache::UpdateMessageIsRead(const std::string& p_ProfileId, const std::string& p_ChatId,
@@ -724,6 +844,18 @@ void MessageCache::UpdateMute(const std::string& p_ProfileId, const std::string&
   EnqueueRequest(updateMuteRequest);
 }
 
+void MessageCache::UpdateArchived(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_IsArchived)
+{
+  if (!m_CacheEnabled) return;
+
+  std::shared_ptr<UpdateArchivedRequest> updateArchivedRequest =
+    std::make_shared<UpdateArchivedRequest>();
+  updateArchivedRequest->profileId = p_ProfileId;
+  updateArchivedRequest->chatId = p_ChatId;
+  updateArchivedRequest->isArchived = p_IsArchived;
+  EnqueueRequest(updateArchivedRequest);
+}
+
 void MessageCache::UpdatePin(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_IsPinned,
                              int64_t p_TimePinned)
 {
@@ -736,6 +868,66 @@ void MessageCache::UpdatePin(const std::string& p_ProfileId, const std::string& 
   updatePinRequest->isPinned = p_IsPinned;
   updatePinRequest->timePinned = p_TimePinned;
   EnqueueRequest(updatePinRequest);
+}
+
+void MessageCache::AddGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId,
+                                   const std::vector<std::string>& p_MemberIds)
+{
+  if (!m_CacheEnabled) return;
+
+  std::shared_ptr<AddGroupMembersRequest> addGroupMembersRequest =
+    std::make_shared<AddGroupMembersRequest>();
+  addGroupMembersRequest->profileId = p_ProfileId;
+  addGroupMembersRequest->chatId = p_ChatId;
+  addGroupMembersRequest->memberIds = p_MemberIds;
+  EnqueueRequest(addGroupMembersRequest);
+}
+
+void MessageCache::FetchGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId)
+{
+  LOG_INFO("FetchGroupMembers()");
+  if (!m_CacheEnabled) return;
+
+  std::shared_ptr<FetchGroupMembersRequest> fetchGroupMembersRequest =
+    std::make_shared<FetchGroupMembersRequest>();
+  fetchGroupMembersRequest->profileId = p_ProfileId;
+  fetchGroupMembersRequest->chatId = p_ChatId;
+  EnqueueRequest(fetchGroupMembersRequest);
+}
+
+std::vector<ContactInfo> MessageCache::FetchGroupMembersSync(const std::string& p_ProfileId,
+                                                             const std::string& p_ChatId)
+{
+  std::vector<ContactInfo> contactInfos;
+  if (!m_CacheEnabled) return contactInfos;
+
+  std::unique_lock<std::mutex> lock(m_DbMutex);
+  if (!m_Dbs[p_ProfileId]) return contactInfos;
+
+  try
+  {
+    // *INDENT-OFF*
+    *m_Dbs[p_ProfileId] <<
+      "SELECT g.memberId, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.isSelf, 0) "
+      "FROM groupmembers g LEFT JOIN " + s_TableContacts + " c ON g.memberId = c.id "
+      "WHERE g.chatId = ?;" << p_ChatId >>
+      [&](const std::string& memberId, const std::string& name, const std::string& phone, int32_t isSelf)
+      {
+        ContactInfo ci;
+        ci.id = memberId;
+        ci.name = name;
+        ci.phone = phone;
+        ci.isSelf = isSelf;
+        contactInfos.push_back(ci);
+      };
+    // *INDENT-ON*
+  }
+  catch (const sqlite::sqlite_exception& ex)
+  {
+    HANDLE_SQLITE_EXCEPTION(ex);
+  }
+
+  return contactInfos;
 }
 
 void MessageCache::Export(const std::string& p_ExportDir)
@@ -1027,10 +1219,10 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
             try
             {
               *m_Dbs[profileId] << "INSERT INTO " + s_TableMessages + " "
-                "(chatId, id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, timeSent, isOutgoing, isRead, reactions) VALUES "
-                "(?,?,?,?,?,?,?,?,?,?,?,?);" <<
+                "(chatId, id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, timeSent, isOutgoing, isRead, isEdited, isDeleted, isPinned, reactions) VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);" <<
                 chatId << msg.id << msg.senderId << msg.text << msg.quotedId << msg.quotedText << msg.quotedSender <<
-                msg.fileInfo << msg.timeSent << msg.isOutgoing << msg.isRead << reactionsBytes;
+                msg.fileInfo << msg.timeSent << msg.isOutgoing << msg.isRead << msg.isEdited << msg.isDeleted << msg.isPinned << reactionsBytes;
             }
             catch (const sqlite::sqlite_exception& ex)
             {
@@ -1052,10 +1244,10 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
             try
             {
               *m_Dbs[profileId] << "INSERT INTO " + s_TableMessages + " "
-                "(chatId, id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, timeSent, isOutgoing, isRead, reactions) VALUES "
-                "(?,?,?,?,?,?,?,?,?,?,?,?);" <<
+                "(chatId, id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, timeSent, isOutgoing, isRead, isEdited, isDeleted, isPinned, reactions) VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);" <<
                 chatId << msg.id << msg.senderId << msg.text << msg.quotedId << msg.quotedText << msg.quotedSender <<
-                msg.fileInfo << msg.timeSent << msg.isOutgoing << msg.isRead << reactionsBytes;
+                msg.fileInfo << msg.timeSent << msg.isOutgoing << msg.isRead << msg.isEdited << msg.isDeleted << msg.isPinned << reactionsBytes;
             }
             catch (const sqlite::sqlite_exception& ex)
             {
@@ -1094,10 +1286,10 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
           for (const auto& chatInfo : addChatsRequest->chatInfos)
           {
             *m_Dbs[profileId] << "INSERT INTO " + s_TableChats + " "
-              "(id, isMuted, isPinned, lastMessageTime) VALUES "
-              "(?, ?, ?, ?);" <<
+              "(id, isMuted, isPinned, lastMessageTime, isArchived) VALUES "
+              "(?, ?, ?, ?, ?);" <<
               chatInfo.id << chatInfo.isMuted << chatInfo.isPinned <<
-              chatInfo.lastMessageTime;
+              chatInfo.lastMessageTime << chatInfo.isArchived;
           }
           *m_Dbs[profileId] << "COMMIT;";
         }
@@ -1162,12 +1354,15 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
           std::map<std::string, int32_t> chatIdMuted;
           std::map<std::string, int32_t> chatIdPinned;
           std::map<std::string, int64_t> chatIdLastMessageTime;
-          *m_Dbs[profileId] << "SELECT id, isMuted, isPinned, lastMessageTime FROM " + s_TableChats + ";" >>
-            [&](const std::string& chatId, int32_t isMuted, int32_t isPinned, int64_t lastMessageTime)
+          std::map<std::string, int32_t> chatIdArchived;
+          *m_Dbs[profileId] << "SELECT id, isMuted, isPinned, lastMessageTime, isArchived FROM " + s_TableChats + ";" >>
+            [&](const std::string& chatId, int32_t isMuted, int32_t isPinned, int64_t lastMessageTime,
+                int32_t isArchived)
             {
               chatIdMuted[chatId] = isMuted;
               chatIdPinned[chatId] = isPinned;
               chatIdLastMessageTime[chatId] = lastMessageTime;
+              chatIdArchived[chatId] = isArchived;
             };
 
           *m_Dbs[profileId] << "SELECT chatId, MAX(timeSent), isOutgoing, isRead FROM " + s_TableMessages + " "
@@ -1181,6 +1376,7 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
                 chatInfo.isUnread = !isOutgoing && !isRead;
                 chatInfo.isMuted = chatIdMuted[chatId];
                 chatInfo.isPinned = chatIdPinned[chatId];
+                chatInfo.isArchived = chatIdArchived[chatId];
                 chatInfo.lastMessageTime = chatInfo.isPinned ? chatIdLastMessageTime[chatId] : timeSent;
                 chatInfos.push_back(chatInfo);
               }
@@ -1313,6 +1509,7 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
         const std::string& fromMsgId = findCachedMessageRequest->fromMsgId;
         const std::string& findText = findCachedMessageRequest->findText;
         const std::string& findMsgId = findCachedMessageRequest->findMsgId;
+        const bool findPinned = findCachedMessageRequest->findPinned;
 
         int64_t findFromMsgIdTimeSent = 0;
         if (!fromMsgId.empty())
@@ -1386,9 +1583,29 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
             HANDLE_SQLITE_EXCEPTION(ex);
           }
         }
+        else if (findPinned)
+        {
+          try
+          {
+            // *INDENT-OFF*
+            *m_Dbs[profileId] <<
+              "SELECT id, timeSent FROM " + s_TableMessages + " WHERE chatId = ? AND timeSent < ? AND isPinned = 1 "
+              "ORDER BY timeSent DESC LIMIT 1;" << chatId << findFromMsgIdTimeSent >>
+              [&](const std::string& id, const int64_t& timeSent)
+              {
+                foundMsgId = id;
+                foundMsgIdTimeSent = timeSent;
+              };
+            // *INDENT-ON*
+          }
+          catch (const sqlite::sqlite_exception& ex)
+          {
+            HANDLE_SQLITE_EXCEPTION(ex);
+          }
+        }
         else
         {
-          LOG_WARNING("neither text nor msg id specified");
+          LOG_WARNING("neither text nor msg id nor pinned specified");
         }
 
         if (!foundMsgId.empty())
@@ -1554,6 +1771,32 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
       }
       break;
 
+    case UpdateMessageIsPinnedRequestType:
+      {
+        std::unique_lock<std::mutex> lock(m_DbMutex);
+        std::shared_ptr<UpdateMessageIsPinnedRequest> updateIsPinnedRequest =
+          std::static_pointer_cast<UpdateMessageIsPinnedRequest>(p_Request);
+        const std::string& profileId = updateIsPinnedRequest->profileId;
+        if (!m_Dbs[profileId]) return;
+
+        const std::string& chatId = updateIsPinnedRequest->chatId;
+        const std::string& msgId = updateIsPinnedRequest->msgId;
+        bool isPinned = updateIsPinnedRequest->isPinned;
+
+        try
+        {
+          *m_Dbs[profileId] << "UPDATE " + s_TableMessages + " SET isPinned = ? WHERE chatId = ? AND id = ?;" <<
+            (int)isPinned << chatId << msgId;
+        }
+        catch (const sqlite::sqlite_exception& ex)
+        {
+          HANDLE_SQLITE_EXCEPTION(ex);
+        }
+
+        LOG_DEBUG("cache update pinned %s %s %d", chatId.c_str(), msgId.c_str(), isPinned);
+      }
+      break;
+
     case UpdateMessageFileInfoRequestType:
       {
         std::unique_lock<std::mutex> lock(m_DbMutex);
@@ -1702,6 +1945,107 @@ void MessageCache::PerformRequest(std::shared_ptr<Request> p_Request)
       }
       break;
 
+    case UpdateArchivedRequestType:
+      {
+        std::unique_lock<std::mutex> lock(m_DbMutex);
+        std::shared_ptr<UpdateArchivedRequest> updateArchivedRequest =
+          std::static_pointer_cast<UpdateArchivedRequest>(p_Request);
+        const std::string& profileId = updateArchivedRequest->profileId;
+        if (!m_Dbs[profileId]) return;
+
+        const std::string& chatId = updateArchivedRequest->chatId;
+        bool isArchived = updateArchivedRequest->isArchived;
+
+        try
+        {
+          *m_Dbs[profileId] << "INSERT INTO " + s_TableChats + " "
+            "(id, isArchived) VALUES "
+            "(?, ?) ON CONFLICT(id) DO UPDATE SET isArchived=?;" <<
+            chatId << isArchived << isArchived;
+        }
+        catch (const sqlite::sqlite_exception& ex)
+        {
+          HANDLE_SQLITE_EXCEPTION(ex);
+        }
+
+        LOG_DEBUG("cache update archived %s %d", chatId.c_str(), isArchived);
+      }
+      break;
+
+    case AddGroupMembersRequestType:
+      {
+        std::unique_lock<std::mutex> lock(m_DbMutex);
+        std::shared_ptr<AddGroupMembersRequest> addGroupMembersRequest =
+          std::static_pointer_cast<AddGroupMembersRequest>(p_Request);
+        const std::string& profileId = addGroupMembersRequest->profileId;
+        if (!m_Dbs[profileId]) return;
+
+        const std::string& chatId = addGroupMembersRequest->chatId;
+        const std::vector<std::string>& memberIds = addGroupMembersRequest->memberIds;
+
+        try
+        {
+          *m_Dbs[profileId] << "BEGIN;";
+          *m_Dbs[profileId] << "DELETE FROM groupmembers WHERE chatId = ?;" << chatId;
+          for (const auto& memberId : memberIds)
+          {
+            *m_Dbs[profileId] << "INSERT INTO groupmembers (chatId, memberId) VALUES (?, ?);"
+                              << chatId << memberId;
+          }
+          *m_Dbs[profileId] << "COMMIT;";
+        }
+        catch (const sqlite::sqlite_exception& ex)
+        {
+          HANDLE_SQLITE_EXCEPTION(ex);
+        }
+
+        LOG_DEBUG("cache add %d group members %s", (int)memberIds.size(), chatId.c_str());
+      }
+      break;
+
+    case FetchGroupMembersRequestType:
+      {
+        std::unique_lock<std::mutex> lock(m_DbMutex);
+        std::shared_ptr<FetchGroupMembersRequest> fetchGroupMembersRequest =
+          std::static_pointer_cast<FetchGroupMembersRequest>(p_Request);
+        const std::string& profileId = fetchGroupMembersRequest->profileId;
+        if (!m_Dbs[profileId]) return;
+
+        const std::string& chatId = fetchGroupMembersRequest->chatId;
+        std::vector<ContactInfo> contactInfos;
+
+        try
+        {
+          // *INDENT-OFF*
+          *m_Dbs[profileId] << "SELECT memberId FROM groupmembers WHERE chatId = ?;" << chatId >>
+            [&](const std::string& memberId)
+            {
+              ContactInfo ci;
+              ci.id = memberId;
+              contactInfos.push_back(ci);
+            };
+          // *INDENT-ON*
+        }
+        catch (const sqlite::sqlite_exception& ex)
+        {
+          HANDLE_SQLITE_EXCEPTION(ex);
+        }
+
+        lock.unlock();
+        LOG_DEBUG("cache fetch %d group members", (int)contactInfos.size());
+
+        if (!contactInfos.empty())
+        {
+          LOG_INFO("FetchGroupMembers cache handled");
+          std::shared_ptr<NewGroupMembersNotify> newGroupMembersNotify =
+            std::make_shared<NewGroupMembersNotify>(profileId);
+          newGroupMembersNotify->chatId = chatId;
+          newGroupMembersNotify->contactInfos = contactInfos;
+          CallMessageHandler(newGroupMembersNotify);
+        }
+      }
+      break;
+
     default:
       {
         LOG_WARNING("cache unknown request type %d", p_Request->GetRequestType());
@@ -1719,13 +2063,14 @@ void MessageCache::PerformFetchMessagesFrom(const std::string& p_ProfileId, cons
     // *INDENT-OFF*
     *m_Dbs[p_ProfileId] <<
       "SELECT id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, reactions, timeSent, "
-      "isOutgoing, isRead FROM " + s_TableMessages + " WHERE chatId = ? AND timeSent < ? "
+      "isOutgoing, isRead, isEdited, isDeleted, isPinned FROM " + s_TableMessages + " WHERE chatId = ? AND timeSent < ? "
       "ORDER BY timeSent DESC LIMIT ?;" << p_ChatId << p_FromMsgIdTimeSent << p_Limit >>
       [&](const std::string& id, const std::string& senderId, const std::string& text,
           const std::string& quotedId, const std::string& quotedText,
           const std::string& quotedSender, const std::string& fileInfo,
           std::vector<char> reactionsBytes,
-          int64_t timeSent, int32_t isOutgoing, int32_t isRead)
+          int64_t timeSent, int32_t isOutgoing, int32_t isRead, int32_t isEdited, int32_t isDeleted,
+          int32_t isPinned)
       {
         ChatMessage chatMessage;
         chatMessage.id = id;
@@ -1738,6 +2083,9 @@ void MessageCache::PerformFetchMessagesFrom(const std::string& p_ProfileId, cons
         chatMessage.timeSent = timeSent;
         chatMessage.isOutgoing = isOutgoing;
         chatMessage.isRead = isRead;
+        chatMessage.isEdited = isEdited;
+        chatMessage.isDeleted = isDeleted;
+        chatMessage.isPinned = isPinned;
 
         if (!reactionsBytes.empty())
         {
@@ -1763,12 +2111,13 @@ void MessageCache::PerformFetchOneMessage(const std::string& p_ProfileId, const 
     // *INDENT-OFF*
     *m_Dbs[p_ProfileId] <<
       "SELECT id, senderId, text, quotedId, quotedText, quotedSender, fileInfo, reactions, timeSent, "
-      "isOutgoing, isRead FROM " + s_TableMessages + " WHERE chatId = ? AND id = ?;" << p_ChatId << p_MsgId >>
+      "isOutgoing, isRead, isEdited, isDeleted, isPinned FROM " + s_TableMessages + " WHERE chatId = ? AND id = ?;" << p_ChatId << p_MsgId >>
       [&](const std::string& id, const std::string& senderId, const std::string& text,
           const std::string& quotedId, const std::string& quotedText,
           const std::string& quotedSender, const std::string& fileInfo,
           std::vector<char> reactionsBytes,
-          int64_t timeSent, int32_t isOutgoing, int32_t isRead)
+          int64_t timeSent, int32_t isOutgoing, int32_t isRead, int32_t isEdited, int32_t isDeleted,
+          int32_t isPinned)
       {
         ChatMessage chatMessage;
         chatMessage.id = id;
@@ -1781,6 +2130,9 @@ void MessageCache::PerformFetchOneMessage(const std::string& p_ProfileId, const 
         chatMessage.timeSent = timeSent;
         chatMessage.isOutgoing = isOutgoing;
         chatMessage.isRead = isRead;
+        chatMessage.isEdited = isEdited;
+        chatMessage.isDeleted = isDeleted;
+        chatMessage.isPinned = isPinned;
 
         if (!reactionsBytes.empty())
         {

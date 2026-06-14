@@ -21,10 +21,10 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Build type (Debug, Release, RelWithDebInfo)
 set(DEFAULT_BUILD_TYPE "Release")
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  message(STATUS "Using build type '${DEFAULT_BUILD_TYPE}' (default).")
+  message(STATUS "Using build type '${DEFAULT_BUILD_TYPE}' (default)")
   set(CMAKE_BUILD_TYPE "${DEFAULT_BUILD_TYPE}")
 else()
-  message(STATUS "Using build type '${CMAKE_BUILD_TYPE}'.")
+  message(STATUS "Using build type '${CMAKE_BUILD_TYPE}'")
 endif()
 
 # Platform specifics
@@ -32,28 +32,88 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   add_definitions(-D_XOPEN_SOURCE_EXTENDED)
 
   # ncurses
-  execute_process(COMMAND sh "-c"
-                  "command -v brew &> /dev/null && brew --prefix ncurses 2> /dev/null | tr -d '\n'"
-                  OUTPUT_VARIABLE NCURSES_ROOT_DIR)
-  if (EXISTS "${NCURSES_ROOT_DIR}")
-    message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (detected).")
+  if (DEFINED NCURSES_ROOT_DIR AND EXISTS "${NCURSES_ROOT_DIR}")
+    message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (user-specified)")
   else()
-    set(NCURSES_ROOT_DIR /opt/local)
-    message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (default).")
+    execute_process(COMMAND sh "-c"
+                    "command -v brew &> /dev/null && brew --prefix ncurses 2> /dev/null | tr -d '\n'"
+                    OUTPUT_VARIABLE NCURSES_ROOT_DIR)
+    if (EXISTS "${NCURSES_ROOT_DIR}")
+      message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (homebrew)")
+    else()
+      foreach(FALLBACK_DIR /opt/homebrew/opt/ncurses /usr/local/opt/ncurses)
+        if (EXISTS "${FALLBACK_DIR}")
+          set(NCURSES_ROOT_DIR "${FALLBACK_DIR}")
+          break()
+        endif()
+      endforeach()
+      if (EXISTS "${NCURSES_ROOT_DIR}")
+        message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (fallback)")
+      elseif (EXISTS "/opt/local")
+        set(NCURSES_ROOT_DIR "/opt/local")
+        message(STATUS "Ncurses cmake prefix '${NCURSES_ROOT_DIR}' (macports)")
+      endif()
+    endif()
   endif()
-  list(APPEND CMAKE_PREFIX_PATH ${NCURSES_ROOT_DIR})
+  if (EXISTS "${NCURSES_ROOT_DIR}")
+    list(APPEND CMAKE_PREFIX_PATH ${NCURSES_ROOT_DIR})
+  endif()
 
   # openssl
-  execute_process(COMMAND sh "-c"
-                  "command -v brew &> /dev/null && brew --prefix openssl 2> /dev/null | tr -d '\n'"
-                  OUTPUT_VARIABLE OPENSSL_ROOT_DIR)
-  if (EXISTS "${OPENSSL_ROOT_DIR}")
-    message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (detected).")
+  if (DEFINED OPENSSL_ROOT_DIR AND EXISTS "${OPENSSL_ROOT_DIR}")
+    message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (user-specified)")
   else()
-    set(OPENSSL_ROOT_DIR /opt/local)
-    message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (default).")
+    execute_process(COMMAND sh "-c"
+                    "command -v brew &> /dev/null && brew --prefix openssl 2> /dev/null | tr -d '\n'"
+                    OUTPUT_VARIABLE OPENSSL_ROOT_DIR)
+    if (EXISTS "${OPENSSL_ROOT_DIR}")
+      message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (homebrew)")
+    else()
+      foreach(FALLBACK_DIR /opt/homebrew/opt/openssl /usr/local/opt/openssl)
+        if (EXISTS "${FALLBACK_DIR}")
+          set(OPENSSL_ROOT_DIR "${FALLBACK_DIR}")
+          break()
+        endif()
+      endforeach()
+      if (EXISTS "${OPENSSL_ROOT_DIR}")
+        message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (fallback)")
+      elseif (EXISTS "/opt/local")
+        set(OPENSSL_ROOT_DIR "/opt/local")
+        message(STATUS "OpenSSL cmake prefix '${OPENSSL_ROOT_DIR}' (macports)")
+      endif()
+    endif()
   endif()
-  list(APPEND CMAKE_PREFIX_PATH ${OPENSSL_ROOT_DIR})
+  if (EXISTS "${OPENSSL_ROOT_DIR}")
+    list(APPEND CMAKE_PREFIX_PATH ${OPENSSL_ROOT_DIR})
+  endif()
+
+  # sqlite
+  if (DEFINED SQLITE_ROOT_DIR AND EXISTS "${SQLITE_ROOT_DIR}")
+    message(STATUS "SQLite cmake prefix '${SQLITE_ROOT_DIR}' (user-specified)")
+  else()
+    execute_process(COMMAND sh "-c"
+                    "command -v brew &> /dev/null && brew --prefix sqlite 2> /dev/null | tr -d '\n'"
+                    OUTPUT_VARIABLE SQLITE_ROOT_DIR)
+    if (EXISTS "${SQLITE_ROOT_DIR}")
+      message(STATUS "SQLite cmake prefix '${SQLITE_ROOT_DIR}' (homebrew)")
+    else()
+      foreach(FALLBACK_DIR /opt/homebrew/opt/sqlite /usr/local/opt/sqlite)
+        if (EXISTS "${FALLBACK_DIR}")
+          set(SQLITE_ROOT_DIR "${FALLBACK_DIR}")
+          break()
+        endif()
+      endforeach()
+      if (EXISTS "${SQLITE_ROOT_DIR}")
+        message(STATUS "SQLite cmake prefix '${SQLITE_ROOT_DIR}' (fallback)")
+      elseif (EXISTS "/opt/local")
+        set(SQLITE_ROOT_DIR "/opt/local")
+        message(STATUS "SQLite cmake prefix '${SQLITE_ROOT_DIR}' (macports)")
+      endif()
+    endif()
+  endif()
+  if (EXISTS "${SQLITE_ROOT_DIR}")
+    list(APPEND CMAKE_PREFIX_PATH ${SQLITE_ROOT_DIR})
+  endif()
 
 elseif (${CMAKE_SYSTEM_NAME} MATCHES "Android")
   add_compile_definitions(_XOPEN_SOURCE_EXTENDED)
@@ -61,6 +121,17 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Android")
     message(STATUS "Found termux")
     add_compile_definitions(HAVE_TERMUX)
   endif()
+elseif (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
+  add_definitions(-D_XOPEN_SOURCE_EXTENDED)
+endif()
+
+# OpenBSD restrictions
+if (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
+  set(HAS_WHATSAPP OFF)
+  set(HAS_SIGNAL OFF)
+  set(HAS_SHARED_LIBS OFF)
+  set(HAS_DYNAMICLOAD OFF)
+  message(STATUS "Disabling WhatsApp, Signal, Shared libs, Dynamic load - OpenBSD restrictions")
 endif()
 
 # Config - Components built as shared libraries
@@ -113,7 +184,7 @@ message(STATUS "Static Go: ${HAS_STATICGOLIB}")
 set(GO_VERSION_MIN 1.23)
 execute_process(COMMAND bash "-c" "go version 2> /dev/null | cut -c14- | cut -d' ' -f1 | tr -d '\n'" OUTPUT_VARIABLE GO_VERSION)
 if((HAS_WHATSAPP OR HAS_SIGNAL) AND (NOT GO_VERSION VERSION_GREATER_EQUAL GO_VERSION_MIN))
-  message(FATAL_ERROR "Go version ${GO_VERSION} (need >= ${GO_VERSION_MIN} to build WhatsApp or Signal).")
+  message(FATAL_ERROR "Go version ${GO_VERSION} (need >= ${GO_VERSION_MIN} to build WhatsApp or Signal)")
 endif()
 
 # Check Little/Big Endian for tdlib requirement
@@ -121,7 +192,7 @@ test_big_endian(IS_BIG_ENDIAN)
 if(IS_BIG_ENDIAN)
   message(STATUS "Endian: Big")
   if(HAS_TELEGRAM)
-    message(WARNING "Telegram requires little endian, auto-disabling.")
+    message(WARNING "Telegram requires little endian, auto-disabling")
 	set(HAS_TELEGRAM OFF)
   endif()
 else()
@@ -161,7 +232,6 @@ endif()
 
 # Application
 add_executable(nchat
-  ext/apathy/path.hpp
   src/main.cpp
   src/ui.cpp
   src/ui.h
@@ -174,6 +244,8 @@ add_executable(nchat
   src/uicontactlistdialog.cpp
   src/uicontactlistdialog.h
   src/uicontroller.cpp
+  src/uigroupmemberlistdialog.cpp
+  src/uigroupmemberlistdialog.h
   src/uicontroller.h
   src/uidialog.cpp
   src/uidialog.h
@@ -219,7 +291,6 @@ add_executable(nchat
 install(TARGETS nchat DESTINATION bin)
 
 # Headers
-target_include_directories(nchat PRIVATE "ext/apathy")
 target_include_directories(nchat PRIVATE "lib/common/src")
 target_include_directories(nchat PRIVATE "lib/ncutil/src")
 
@@ -245,17 +316,24 @@ if(HAS_SIGNAL)
   add_subdirectory(lib/sgchat)
 endif()
 
-# Dependency clip
-add_subdirectory(ext/clip)
-
 # Dependency ncurses
-set(CURSES_NEED_NCURSES TRUE)
-set(CURSES_NEED_WIDE TRUE)
-find_package(Curses REQUIRED)
-include_directories(${CURSES_INCLUDE_DIR})
+if (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
+  target_link_libraries(nchat PUBLIC ncurses)
+else()
+  set(CURSES_NEED_NCURSES TRUE)
+  set(CURSES_NEED_WIDE TRUE)
+  find_package(Curses REQUIRED)
+  include_directories(${CURSES_INCLUDE_DIR})
+  target_compile_options(nchat PUBLIC ${NCURSES_CFLAGS})
+endif()
 
-# Compile options
-target_compile_options(nchat PUBLIC ${NCURSES_CFLAGS})
+# Dependency execinfo
+if (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
+  find_library(EXECINFO_LIBRARY execinfo)
+  if(EXECINFO_LIBRARY)
+    target_link_libraries(nchat PUBLIC ${EXECINFO_LIBRARY})
+  endif()
+endif()
 
 # Linking
 target_link_libraries(nchat PUBLIC ncutil pthread ${CURSES_LIBRARIES} ${CMAKE_DL_LIBS})
@@ -341,27 +419,6 @@ install(FILES src/nchat.1 DESTINATION "${CMAKE_INSTALL_MANDIR}/man1")
 configure_file(src/compose ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_INSTALL_LIBEXECDIR}/nchat/compose COPYONLY)
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_INSTALL_LIBEXECDIR}/nchat/compose DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/nchat)
 
-# Themes
-macro(add_theme themedir)
-  configure_file(themes/${themedir}/color.conf ${CMAKE_CURRENT_BINARY_DIR}/share/nchat/themes/${themedir}/color.conf COPYONLY)
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/share/nchat/themes/${themedir}/color.conf DESTINATION share/nchat/themes/${themedir})
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/themes/${themedir}/usercolor.conf")
-    configure_file(themes/${themedir}/usercolor.conf ${CMAKE_CURRENT_BINARY_DIR}/share/nchat/themes/${themedir}/usercolor.conf COPYONLY)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/share/nchat/themes/${themedir}/usercolor.conf DESTINATION share/nchat/themes/${themedir})
-  endif()
-endmacro()
-add_theme("default")
-add_theme("basic-color")
-add_theme("dracula")
-add_theme("catppuccin-mocha")
-add_theme("espresso")
-add_theme("gruvbox-dark")
-add_theme("solarized-dark-higher-contrast")
-add_theme("tokyo-night")
-add_theme("tomorrow-night")
-add_theme("zenbones-dark")
-add_theme("zenburned")
-
 # Uninstall
 if(HAS_SHARED_LIBS)
   add_custom_target(uninstall
@@ -373,7 +430,6 @@ if(HAS_SHARED_LIBS)
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libduchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libwmchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libsgchat${CMAKE_SHARED_LIBRARY_SUFFIX}"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/share/nchat"
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBEXECDIR}/nchat/compose"
     COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBEXECDIR}/nchat"
   )
@@ -381,7 +437,6 @@ else()
   add_custom_target(uninstall
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/bin/nchat"
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_MANDIR}/man1/nchat.1"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/share/nchat"
     COMMAND "${CMAKE_COMMAND}" -E remove "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBEXECDIR}/nchat/compose"
     COMMAND "${CMAKE_COMMAND}" -E remove_directory "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBEXECDIR}/nchat"
   )
@@ -389,16 +444,14 @@ endif()
 
 # Dev Application
 if(CMAKE_BUILD_TYPE MATCHES "Debug")
-  message(STATUS "Building dev application.")
+  message(STATUS "Building dev application")
   add_executable(devnchat
-    ext/apathy/path.hpp
     src/main.cpp
     dev/ui.cpp
     dev/ui.h
   )
 
   # Headers
-  target_include_directories(devnchat PRIVATE "ext/apathy")
   target_include_directories(devnchat PRIVATE "lib/common/src")
   target_include_directories(devnchat PRIVATE "lib/ncutil/src")
 

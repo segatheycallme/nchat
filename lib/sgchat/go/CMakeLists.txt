@@ -29,73 +29,95 @@ endif()
 # Build Go library / C archive
 set(TARGET cgosg)
 set(GOPATH ${OUTPUT_DIR})
-set(SRCS gosg.go cgosg.go)
+set(SRCS gosg.go cgosg.go go.mod go.sum)
+file(GLOB_RECURSE EXT_SRCS ext/*.go)
+list(APPEND SRCS ${EXT_SRCS})
 set(LIB "libcgosg${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
-# Option to build libsignal_ffi from source instead of downloading
-option(BUILD_LIBSIGNAL "Build libsignal_ffi from source" ON)
-set(LIBSIGNAL_BUILD_REF "f5f6456c03c3266092609c838b28ab205e9200ec" CACHE STRING "Git ref (branch, tag, or commit SHA) for libsignal_ffi.a download")
+# Option to download pre-built libsignal_ffi instead of building from source
+option(DOWNLOAD_LIBSIGNAL "Download pre-built libsignal_ffi (falls back to building from source if unavailable)" ON)
+# LIBSIGNAL_BUILD_REF — intentionally a plain (non-CACHE) variable so the value
+# defined here always wins over CMakeCache.txt. The ref must match the ABI of
+# the vendored libsignal-ffi.h; a CACHE variable would stick to its first
+# configured value and silently ignore a bump here, leaving an ABI-mismatched
+# libsignal_ffi.a in the build tree (runtime crash in signal_encrypt_message).
+# This also means the ref cannot be overridden from the command line with
+# -DLIBSIGNAL_BUILD_REF=...; edit this line directly (or use utils/signal-update).
+set(LIBSIGNAL_BUILD_REF "d540ec0a4d012c538829312066045f612cb48c24")
 
 set(LIBSIGNAL_FFI_DIR ${CMAKE_CURRENT_BINARY_DIR}/libsignal)
 set(LIBSIGNAL_FFI_FILE ${LIBSIGNAL_FFI_DIR}/libsignal_ffi.a)
 
-if(NOT BUILD_LIBSIGNAL)
+set(LIBSIGNAL_USE_DOWNLOAD FALSE)
+
+if(DOWNLOAD_LIBSIGNAL)
   # Detect OS for libsignal download
   if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(LIBSIGNAL_OS "macos")
   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(LIBSIGNAL_OS "linux")
   else()
-    message(FATAL_ERROR "Unsupported OS for libsignal_ffi download: ${CMAKE_SYSTEM_NAME}. Use -DBUILD_LIBSIGNAL=ON to build from source.")
+    message(STATUS "Unsupported OS for libsignal_ffi download: ${CMAKE_SYSTEM_NAME}, falling back to build from source.")
   endif()
 
   # Detect arch for libsignal download
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(LIBSIGNAL_ARCH "arm64")
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(LIBSIGNAL_ARCH "amd64")
-  else()
-    message(FATAL_ERROR "Unsupported architecture for libsignal_ffi download: ${CMAKE_SYSTEM_PROCESSOR}. Use -DBUILD_LIBSIGNAL=ON to build from source.")
+  if(LIBSIGNAL_OS)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+      set(LIBSIGNAL_ARCH "arm64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+      set(LIBSIGNAL_ARCH "amd64")
+    else()
+      message(STATUS "Unsupported architecture for libsignal_ffi download: ${CMAKE_SYSTEM_PROCESSOR}, falling back to build from source.")
+    endif()
   endif()
 
-  # Invalidate cached libsignal_ffi.a if build ref has changed
-  set(LIBSIGNAL_FFI_REF_FILE ${LIBSIGNAL_FFI_DIR}/libsignal_ffi.ref)
-  if(EXISTS ${LIBSIGNAL_FFI_FILE} AND EXISTS ${LIBSIGNAL_FFI_REF_FILE})
-    file(READ ${LIBSIGNAL_FFI_REF_FILE} LIBSIGNAL_FFI_CACHED_REF)
-    string(STRIP "${LIBSIGNAL_FFI_CACHED_REF}" LIBSIGNAL_FFI_CACHED_REF)
-    if(NOT "${LIBSIGNAL_FFI_CACHED_REF}" STREQUAL "${LIBSIGNAL_BUILD_REF}")
-      message(STATUS "LIBSIGNAL_BUILD_REF changed (${LIBSIGNAL_FFI_CACHED_REF} -> ${LIBSIGNAL_BUILD_REF}), re-downloading")
+  if(LIBSIGNAL_OS AND LIBSIGNAL_ARCH)
+    # Invalidate cached libsignal_ffi.a if build ref has changed
+    set(LIBSIGNAL_FFI_REF_FILE ${LIBSIGNAL_FFI_DIR}/libsignal_ffi.ref)
+    if(EXISTS ${LIBSIGNAL_FFI_FILE} AND EXISTS ${LIBSIGNAL_FFI_REF_FILE})
+      file(READ ${LIBSIGNAL_FFI_REF_FILE} LIBSIGNAL_FFI_CACHED_REF)
+      string(STRIP "${LIBSIGNAL_FFI_CACHED_REF}" LIBSIGNAL_FFI_CACHED_REF)
+      if(NOT "${LIBSIGNAL_FFI_CACHED_REF}" STREQUAL "${LIBSIGNAL_BUILD_REF}")
+        message(STATUS "LIBSIGNAL_BUILD_REF changed (${LIBSIGNAL_FFI_CACHED_REF} -> ${LIBSIGNAL_BUILD_REF}), re-downloading")
+        file(REMOVE ${LIBSIGNAL_FFI_FILE})
+        file(REMOVE ${LIBSIGNAL_FFI_REF_FILE})
+      endif()
+    elseif(EXISTS ${LIBSIGNAL_FFI_FILE} AND NOT EXISTS ${LIBSIGNAL_FFI_REF_FILE})
+      message(STATUS "No ref file found for existing libsignal_ffi.a, re-downloading")
       file(REMOVE ${LIBSIGNAL_FFI_FILE})
     endif()
-  elseif(EXISTS ${LIBSIGNAL_FFI_FILE} AND NOT EXISTS ${LIBSIGNAL_FFI_REF_FILE})
-    message(STATUS "No ref file found for existing libsignal_ffi.a, re-downloading")
-    file(REMOVE ${LIBSIGNAL_FFI_FILE})
-  endif()
 
-  # Download libsignal_ffi.a if not already present
-  if(NOT EXISTS ${LIBSIGNAL_FFI_FILE})
-    set(LIBSIGNAL_FFI_URL "https://mau.dev/tulir/gomuks-build-docker/-/jobs/artifacts/${LIBSIGNAL_BUILD_REF}/raw/libsignal_ffi.a?job=libsignal%20${LIBSIGNAL_OS}%20${LIBSIGNAL_ARCH}")
-    message(STATUS "Downloading libsignal_ffi.a for ${LIBSIGNAL_OS} ${LIBSIGNAL_ARCH}...")
-    file(DOWNLOAD ${LIBSIGNAL_FFI_URL} ${LIBSIGNAL_FFI_FILE}
-      TLS_VERIFY ON
-      STATUS LIBSIGNAL_DOWNLOAD_STATUS)
-    list(GET LIBSIGNAL_DOWNLOAD_STATUS 0 LIBSIGNAL_DOWNLOAD_CODE)
-    list(GET LIBSIGNAL_DOWNLOAD_STATUS 1 LIBSIGNAL_DOWNLOAD_MSG)
-    if(NOT LIBSIGNAL_DOWNLOAD_CODE EQUAL 0)
-      file(REMOVE ${LIBSIGNAL_FFI_FILE})
-      message(FATAL_ERROR "Failed to download libsignal_ffi.a: ${LIBSIGNAL_DOWNLOAD_MSG}")
+    # Download libsignal_ffi.a if not already present
+    if(NOT EXISTS ${LIBSIGNAL_FFI_FILE})
+      set(LIBSIGNAL_FFI_URL "https://mau.dev/tulir/gomuks-build-docker/-/jobs/artifacts/${LIBSIGNAL_BUILD_REF}/raw/libsignal_ffi.a?job=libsignal%20${LIBSIGNAL_OS}%20${LIBSIGNAL_ARCH}")
+      message(STATUS "Downloading libsignal_ffi.a for ${LIBSIGNAL_OS} ${LIBSIGNAL_ARCH}...")
+      file(DOWNLOAD ${LIBSIGNAL_FFI_URL} ${LIBSIGNAL_FFI_FILE}
+        TLS_VERIFY ON
+        STATUS LIBSIGNAL_DOWNLOAD_STATUS)
+      list(GET LIBSIGNAL_DOWNLOAD_STATUS 0 LIBSIGNAL_DOWNLOAD_CODE)
+      list(GET LIBSIGNAL_DOWNLOAD_STATUS 1 LIBSIGNAL_DOWNLOAD_MSG)
+      if(NOT LIBSIGNAL_DOWNLOAD_CODE EQUAL 0)
+        file(REMOVE ${LIBSIGNAL_FFI_FILE})
+        message(STATUS "Failed to download libsignal_ffi.a: ${LIBSIGNAL_DOWNLOAD_MSG}, falling back to build from source.")
+      else()
+        file(SIZE ${LIBSIGNAL_FFI_FILE} LIBSIGNAL_FFI_SIZE)
+        if(LIBSIGNAL_FFI_SIZE LESS 1000)
+          file(REMOVE ${LIBSIGNAL_FFI_FILE})
+          message(STATUS "Downloaded libsignal_ffi.a is too small (${LIBSIGNAL_FFI_SIZE} bytes), falling back to build from source.")
+        else()
+          message(STATUS "Downloaded libsignal_ffi.a (${LIBSIGNAL_FFI_SIZE} bytes)")
+          file(WRITE ${LIBSIGNAL_FFI_REF_FILE} "${LIBSIGNAL_BUILD_REF}\n")
+          set(LIBSIGNAL_USE_DOWNLOAD TRUE)
+        endif()
+      endif()
+    else()
+      message(STATUS "Using existing libsignal_ffi.a from ${LIBSIGNAL_FFI_DIR}")
+      set(LIBSIGNAL_USE_DOWNLOAD TRUE)
     endif()
-    file(SIZE ${LIBSIGNAL_FFI_FILE} LIBSIGNAL_FFI_SIZE)
-    if(LIBSIGNAL_FFI_SIZE LESS 1000)
-      file(REMOVE ${LIBSIGNAL_FFI_FILE})
-      message(FATAL_ERROR "Downloaded libsignal_ffi.a is too small (${LIBSIGNAL_FFI_SIZE} bytes) — likely an error page")
-    endif()
-    message(STATUS "Downloaded libsignal_ffi.a (${LIBSIGNAL_FFI_SIZE} bytes)")
-    file(WRITE ${LIBSIGNAL_FFI_REF_FILE} "${LIBSIGNAL_BUILD_REF}\n")
-  else()
-    message(STATUS "Using existing libsignal_ffi.a from ${LIBSIGNAL_FFI_DIR}")
   endif()
-else()
+endif()
+
+if(NOT LIBSIGNAL_USE_DOWNLOAD)
   # Build libsignal_ffi from source
   # Determine required version from version.go
   file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/ext/signal/pkg/libsignalgo/version.go" LIBSIGNAL_VERSION_LINE REGEX "const Version")

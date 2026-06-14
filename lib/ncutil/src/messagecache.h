@@ -1,6 +1,6 @@
 // messagecache.h
 //
-// Copyright (c) 2020-2025 Kristofer Berggren
+// Copyright (c) 2020-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -41,10 +41,14 @@ private:
     DeleteOneMessageRequestType,
     DeleteOneChatRequestType,
     UpdateMessageIsReadRequestType,
+    UpdateMessageIsPinnedRequestType,
     UpdateMessageFileInfoRequestType,
     UpdateMessageReactionsRequestType,
     UpdateMuteRequestType,
     UpdatePinRequestType,
+    UpdateArchivedRequestType,
+    AddGroupMembersRequestType,
+    FetchGroupMembersRequestType,
   };
 
   class Request
@@ -126,6 +130,7 @@ private:
     std::string lastMsgId;
     std::string findText;
     std::string findMsgId;
+    bool findPinned = false;
   };
 
   class DeleteOneMessageRequest : public Request
@@ -153,6 +158,16 @@ private:
     std::string chatId;
     std::string msgId;
     bool isRead = false;
+  };
+
+  class UpdateMessageIsPinnedRequest : public Request
+  {
+  public:
+    virtual RequestType GetRequestType() const { return UpdateMessageIsPinnedRequestType; }
+    std::string profileId;
+    std::string chatId;
+    std::string msgId;
+    bool isPinned = false;
   };
 
   class UpdateMessageFileInfoRequest : public Request
@@ -194,6 +209,32 @@ private:
     int64_t timePinned = -1;
   };
 
+  class UpdateArchivedRequest : public Request
+  {
+  public:
+    virtual RequestType GetRequestType() const { return UpdateArchivedRequestType; }
+    std::string profileId;
+    std::string chatId;
+    bool isArchived = false;
+  };
+
+  class AddGroupMembersRequest : public Request
+  {
+  public:
+    virtual RequestType GetRequestType() const { return AddGroupMembersRequestType; }
+    std::string profileId;
+    std::string chatId;
+    std::vector<std::string> memberIds;
+  };
+
+  class FetchGroupMembersRequest : public Request
+  {
+  public:
+    virtual RequestType GetRequestType() const { return FetchGroupMembersRequestType; }
+    std::string profileId;
+    std::string chatId;
+  };
+
 public:
   static void Init();
   static void Cleanup();
@@ -219,19 +260,27 @@ public:
                             const std::string& p_MsgId, std::vector<ChatMessage>& p_ChatMessages);
   static void FindMessage(const std::string& p_ProfileId, const std::string& p_ChatId, const std::string& p_FromMsgId,
                           const std::string& p_LastMsgId, const std::string& p_FindText,
-                          const std::string& p_FindMsgId);
+                          const std::string& p_FindMsgId, bool p_FindPinned);
   static void DeleteOneMessage(const std::string& p_ProfileId, const std::string& p_ChatId, const std::string& p_MsgId);
   static void DeleteChat(const std::string& p_ProfileId, const std::string& p_ChatId);
   static void UpdateMessageIsRead(const std::string& p_ProfileId, const std::string& p_ChatId,
                                   const std::string& p_MsgId,
                                   bool p_IsRead);
+  static void UpdateMessageIsPinned(const std::string& p_ProfileId, const std::string& p_ChatId,
+                                    const std::string& p_MsgId,
+                                    bool p_IsPinned);
   static void UpdateMessageFileInfo(const std::string& p_ProfileId, const std::string& p_ChatId,
                                     const std::string& p_MsgId, const std::string& p_FileInfo);
   static void UpdateMessageReactions(const std::string& p_ProfileId, const std::string& p_ChatId,
                                      const std::string& p_MsgId, const Reactions& p_Reactions);
   static void UpdateMute(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_IsMuted);
+  static void UpdateArchived(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_IsArchived);
   static void UpdatePin(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_IsPinned,
                         int64_t p_TimePinned);
+  static void AddGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId,
+                              const std::vector<std::string>& p_MemberIds);
+  static void FetchGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId);
+  static std::vector<ContactInfo> FetchGroupMembersSync(const std::string& p_ProfileId, const std::string& p_ChatId);
   static void Export(const std::string& p_ExportDir);
 
 private:

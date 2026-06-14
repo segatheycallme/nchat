@@ -1,19 +1,20 @@
-Base-Commit: 93da772584b20ac1975e872e26739b273314b73e
+Base-Commit: 1f45d1af1a64a96265647ee74a80aa454b0b7296
 Base-Branch: 
 diff --git a/pkg/signalmeow/events/message.go b/pkg/signalmeow/events/message.go
-index 7d3732a..86faba7 100644
+index 7d3732a..338c657 100644
 --- a/pkg/signalmeow/events/message.go
 +++ b/pkg/signalmeow/events/message.go
-@@ -39,6 +39,8 @@ func (*DeleteForMe) isSignalEvent()            {}
+@@ -39,6 +39,9 @@ func (*DeleteForMe) isSignalEvent()            {}
  func (*MessageRequestResponse) isSignalEvent() {}
  func (*QueueEmpty) isSignalEvent()             {}
  func (*LoggedOut) isSignalEvent()              {}
 +func (*PinnedConversationsChanged) isSignalEvent() {}
 +func (*ChatMuteChanged) isSignalEvent()            {}
++func (*ChatArchivedChanged) isSignalEvent()        {}
  
  type MessageInfo struct {
  	Sender uuid.UUID
-@@ -101,3 +103,12 @@ type MessageRequestResponse struct {
+@@ -101,3 +104,17 @@ type MessageRequestResponse struct {
  type QueueEmpty struct{}
  
  type LoggedOut struct{ Error error }
@@ -26,11 +27,29 @@ index 7d3732a..86faba7 100644
 +	ChatID              string
 +	MutedUntilTimestamp uint64
 +}
++
++type ChatArchivedChanged struct {
++	ChatID   string
++	Archived bool
++}
 diff --git a/pkg/signalmeow/storageservice.go b/pkg/signalmeow/storageservice.go
-index fcf6848..a91ec6f 100644
+index 899c54b..e02b04b 100644
 --- a/pkg/signalmeow/storageservice.go
 +++ b/pkg/signalmeow/storageservice.go
-@@ -121,6 +121,12 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
+@@ -68,6 +68,12 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
+ 			log.Trace().Any("contact_record", data.Contact).Msg("Handling contact record")
+ 			aci, _ := ParseStringOrBinaryUUID(data.Contact.Aci, data.Contact.AciBinary)
+ 			pni, _ := ParseStringOrBinaryUUID(data.Contact.Pni, data.Contact.PniBinary)
++			if aci == uuid.Nil && len(data.Contact.GetAciBinary()) == 16 {
++				aci, _ = uuid.FromBytes(data.Contact.GetAciBinary())
++			}
++			if pni == uuid.Nil && len(data.Contact.GetPniBinary()) == 16 {
++				pni, _ = uuid.FromBytes(data.Contact.GetPniBinary())
++			}
+ 			if aci == uuid.Nil && pni == uuid.Nil {
+ 				log.Warn().
+ 					Str("raw_aci", data.Contact.Aci).
+@@ -123,6 +129,16 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
  			if topLevelChanged {
  				changedContacts = append(changedContacts, recipient)
  			}
@@ -39,11 +58,15 @@ index fcf6848..a91ec6f 100644
 +					ChatID:              aci.String(),
 +					MutedUntilTimestamp: data.Contact.GetMutedUntilTimestamp(),
 +				})
++				go cli.handleEvent(&events.ChatArchivedChanged{
++					ChatID:   aci.String(),
++					Archived: data.Contact.GetArchived(),
++				})
 +			}
  		case *signalpb.StorageRecord_GroupV2:
  			if len(data.GroupV2.MasterKey) != libsignalgo.GroupMasterKeyLength {
  				log.Warn().Msg("Invalid group master key length")
-@@ -132,6 +138,10 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
+@@ -134,6 +150,14 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
  				return fmt.Errorf("failed to store group master key for %s: %w", groupID, err)
  			}
  			log.Debug().Stringer("group_id", groupID).Msg("Stored group master key from storage service")
@@ -51,10 +74,14 @@ index fcf6848..a91ec6f 100644
 +				ChatID:              string(groupID),
 +				MutedUntilTimestamp: data.GroupV2.GetMutedUntilTimestamp(),
 +			})
++			go cli.handleEvent(&events.ChatArchivedChanged{
++				ChatID:   string(groupID),
++				Archived: data.GroupV2.GetArchived(),
++			})
  		case *signalpb.StorageRecord_Account:
  			log.Trace().Any("account_record", data.Account).Msg("Found account record")
  			cli.Store.AccountRecord = data.Account
-@@ -140,6 +150,9 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
+@@ -142,6 +166,9 @@ func (cli *Client) processStorageInTxn(ctx context.Context, update *StorageUpdat
  				return fmt.Errorf("failed to save device after receiving account record: %w", err)
  			}
  			log.Debug().Msg("Saved device after receiving account record")
@@ -64,41 +91,37 @@ index fcf6848..a91ec6f 100644
  		case *signalpb.StorageRecord_GroupV1, *signalpb.StorageRecord_StoryDistributionList:
  			// irrelevant data
  		default:
-diff --git a/pkg/signalmeow/store/group_store.go b/pkg/signalmeow/store/group_store.go
-index 39b4684..640ce35 100644
---- a/pkg/signalmeow/store/group_store.go
-+++ b/pkg/signalmeow/store/group_store.go
-@@ -37,10 +37,12 @@ type dbGroup struct {
- type GroupStore interface {
- 	MasterKeyFromGroupIdentifier(ctx context.Context, groupID types.GroupIdentifier) (types.SerializedGroupMasterKey, error)
- 	StoreMasterKey(ctx context.Context, groupID types.GroupIdentifier, key types.SerializedGroupMasterKey) error
-+	AllGroupIdentifiers(ctx context.Context) ([]types.GroupIdentifier, error)
+diff --git a/pkg/signalmeow/store/backup_store.go b/pkg/signalmeow/store/backup_store.go
+index e99b110..78f9ecb 100644
+--- a/pkg/signalmeow/store/backup_store.go
++++ b/pkg/signalmeow/store/backup_store.go
+@@ -55,6 +55,7 @@ type BackupStore interface {
+ 	GetBackupChats(ctx context.Context) ([]*BackupChat, error)
+ 	GetBackupChatItems(ctx context.Context, chatID uint64, anchor time.Time, forward bool, limit int) ([]*backuppb.ChatItem, error)
+ 	DeleteBackupChat(ctx context.Context, chatID uint64) error
++	DeleteBackupChatItem(ctx context.Context, chatID uint64, messageID uint64) error
+ 	DeleteBackupChatItems(ctx context.Context, chatID uint64, minTime time.Time) error
  }
  
- const (
- 	getGroupByIDQuery         = `SELECT account_id, group_identifier, master_key FROM signalmeow_groups WHERE account_id=$1 AND group_identifier=$2`
-+	getAllGroupIDsQuery       = `SELECT group_identifier FROM signalmeow_groups WHERE account_id=$1`
- 	upsertGroupMasterKeyQuery = `
- 		INSERT INTO signalmeow_groups (account_id, group_identifier, master_key)
- 		VALUES ($1, $2, $3)
-@@ -73,3 +75,20 @@ func (s *sqlStore) StoreMasterKey(ctx context.Context, groupID types.GroupIdenti
- 	_, err := s.db.Exec(ctx, upsertGroupMasterKeyQuery, s.AccountID, groupID, key)
+@@ -109,6 +110,9 @@ const (
+ 	deleteBackupChatQuery = `
+ 		DELETE FROM signalmeow_backup_chat WHERE account_id=$1 AND chat_id=$2
+ 	`
++	deleteBackupChatItemQuery = `
++		DELETE FROM signalmeow_backup_message WHERE account_id=$1 AND chat_id=$2 AND message_id=$3
++	`
+ 	deleteBackupChatItemsQuery = `
+ 		DELETE FROM signalmeow_backup_message WHERE account_id=$1 AND chat_id=$2 AND message_id >= $3
+ 	`
+@@ -330,6 +334,11 @@ func (s *sqlStore) DeleteBackupChatItems(ctx context.Context, chatID uint64, min
  	return err
  }
-+
-+func (s *sqlStore) AllGroupIdentifiers(ctx context.Context) ([]types.GroupIdentifier, error) {
-+	rows, err := s.db.Query(ctx, getAllGroupIDsQuery, s.AccountID)
-+	if err != nil {
-+		return nil, err
-+	}
-+	defer rows.Close()
-+	var groups []types.GroupIdentifier
-+	for rows.Next() {
-+		var gid types.GroupIdentifier
-+		if err := rows.Scan(&gid); err != nil {
-+			return nil, err
-+		}
-+		groups = append(groups, gid)
-+	}
-+	return groups, rows.Err()
+ 
++func (s *sqlStore) DeleteBackupChatItem(ctx context.Context, chatID uint64, messageID uint64) error {
++	_, err := s.db.Exec(ctx, deleteBackupChatItemQuery, s.AccountID, chatID, messageID)
++	return err
 +}
++
+ func (s *sqlStore) DeleteBackupChat(ctx context.Context, chatID uint64) error {
+ 	_, err := s.db.Exec(ctx, deleteBackupChatQuery, s.AccountID, chatID)
+ 	return err

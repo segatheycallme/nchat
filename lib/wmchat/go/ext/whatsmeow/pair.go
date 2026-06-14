@@ -7,19 +7,21 @@
 package whatsmeow
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"strings"
+	"time"
 
 	"go.mau.fi/libsignal/ecc"
 	"google.golang.org/protobuf/proto"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waAdv"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"go.mau.fi/whatsmeow/proto/waWa6"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"go.mau.fi/whatsmeow/util/keys"
@@ -71,17 +73,49 @@ func (cli *Client) handlePairDevice(ctx context.Context, node *waBinary.Node) {
 			cli.Log.Warnf("pair-device node contains unexpected child content type %T at index %d", child, i)
 			continue
 		}
-		evt.Codes = append(evt.Codes, cli.makeQRData(string(content)))
+		evt.Codes = append(evt.Codes, cli.makeQRData(content, cli.getQRClientType()))
 	}
 
 	cli.dispatchEvent(evt)
 }
 
-func (cli *Client) makeQRData(ref string) string {
+func (cli *Client) getQRClientType() PairClientType {
+	if cli.QRClientType != "" {
+		return cli.QRClientType
+	}
+	switch store.DeviceProps.GetPlatformType() {
+	case waCompanionReg.DeviceProps_CHROME:
+		return PairClientChrome
+	case waCompanionReg.DeviceProps_FIREFOX:
+		return PairClientFirefox
+	case waCompanionReg.DeviceProps_EDGE:
+		return PairClientEdge
+	case waCompanionReg.DeviceProps_IE:
+		return PairClientIE
+	case waCompanionReg.DeviceProps_OPERA:
+		return PairClientOpera
+	case waCompanionReg.DeviceProps_SAFARI:
+		return PairClientSafari
+	case waCompanionReg.DeviceProps_UWP:
+		return PairClientUWP
+	case waCompanionReg.DeviceProps_ANDROID_PHONE:
+		return PairClientAndroid
+	}
+	switch store.BaseClientPayload.UserAgent.GetPlatform() {
+	case waWa6.ClientPayload_UserAgent_WEB:
+		return PairClientOtherWebClient
+	case waWa6.ClientPayload_UserAgent_MACOS:
+		return PairClientMacOS
+	default:
+		return PairClientUnknown
+	}
+}
+
+func (cli *Client) makeQRData(ref []byte, clientType PairClientType) string {
 	noise := base64.StdEncoding.EncodeToString(cli.Store.NoiseKey.Pub[:])
 	identity := base64.StdEncoding.EncodeToString(cli.Store.IdentityKey.Pub[:])
 	adv := base64.StdEncoding.EncodeToString(cli.Store.AdvSecretKey)
-	return strings.Join([]string{ref, noise, identity, adv}, ",")
+	return fmt.Sprintf("https://wa.me/settings/linked_devices#%s,%s,%s,%s,%s", ref, noise, identity, adv, clientType)
 }
 
 func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
@@ -93,6 +127,7 @@ func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
 	jid, _ := pairSuccess.GetChildByTag("device").Attrs["jid"].(types.JID)
 	lid, _ := pairSuccess.GetChildByTag("device").Attrs["lid"].(types.JID)
 	platform, _ := pairSuccess.GetChildByTag("platform").Attrs["name"].(string)
+	cli.serverTimeOffset.Store(int64(node.AttrGetter().UnixTime("t").Sub(time.Now().Round(time.Second))))
 
 	go func() {
 		err := cli.handlePair(ctx, deviceIdentityBytes, id, businessName, platform, jid, lid)
@@ -102,6 +137,7 @@ func (cli *Client) handlePairSuccess(ctx context.Context, node *waBinary.Node) {
 			cli.dispatchEvent(&events.PairError{ID: jid, LID: lid, BusinessName: businessName, Platform: platform, Error: err})
 		} else {
 			cli.Log.Infof("Successfully paired %s", cli.Store.ID)
+			go cli.sendUnifiedSession()
 			cli.dispatchEvent(&events.PairSuccess{ID: jid, LID: lid, BusinessName: businessName, Platform: platform})
 		}
 	}()
@@ -122,7 +158,7 @@ func (cli *Client) handlePair(ctx context.Context, deviceIdentityBytes []byte, r
 	}
 	h.Write(deviceIdentityContainer.Details)
 
-	if !bytes.Equal(h.Sum(nil), deviceIdentityContainer.HMAC) {
+	if !hmac.Equal(h.Sum(nil), deviceIdentityContainer.HMAC) {
 		cli.Log.Warnf("Invalid HMAC from pair success message")
 		cli.sendPairError(ctx, reqID, 401, "hmac-mismatch")
 		return ErrPairInvalidDeviceIdentityHMAC

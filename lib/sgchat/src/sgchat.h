@@ -39,6 +39,7 @@ public:
   std::string GetProfileId() const;
   std::string GetProfileDisplayName() const;
   bool HasFeature(ProtocolFeature p_ProtocolFeature) const;
+  bool IsGroupChat(const std::string& p_ChatId) const;
   std::string GetSelfId() const;
 
   bool SetupProfile(const std::string& p_ProfilesDir, std::string& p_ProfileId);
@@ -111,7 +112,8 @@ extern "C" {
 void SgNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Phone, int p_IsSelf, int p_IsAlias,
                          int p_Notify);
 void SgNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMuted, int p_IsPinned,
-                      int p_LastMessageTime);
+                      int p_IsArchived, int p_LastMessageTime);
+void SgNewGroupMembersNotify(int p_ConnId, char* p_ChatId, char* p_MembersJson);
 void SgNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe,
                          char* p_ReplyId, char* p_FileId, char* p_FilePath, int p_FileStatus, int p_TimeSent,
                          int p_IsRead, int p_IsEdited);
@@ -126,8 +128,9 @@ void SgNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p
 void SgNewMessageReactionNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text,
                                 int p_FromMe);
 void SgDeleteChatNotify(int p_ConnId, char* p_ChatId);
-void SgDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId);
+void SgDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsOutgoing);
 void SgUpdateMuteNotify(int p_ConnId, char* p_ChatId, int p_IsMuted);
+void SgUpdateArchivedNotify(int p_ConnId, char* p_ChatId, int p_IsArchived);
 void SgUpdatePinNotify(int p_ConnId, char* p_ChatId, int p_IsPinned, int p_TimePinned);
 void SgReinit(int p_ConnId);
 void SgSetProtocolUiControl(int p_ConnId, int p_IsTakeControl);

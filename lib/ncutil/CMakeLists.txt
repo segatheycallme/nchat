@@ -45,6 +45,8 @@ add_library(ncutil ${LIBRARY_LINKING_TYPE}
   src/emojiutil_view.h
   src/fileutil.cpp
   src/fileutil.h
+  src/setuputil.cpp
+  src/setuputil.h
   src/log.cpp
   src/log.h
   src/messagecache.cpp
@@ -57,6 +59,8 @@ add_library(ncutil ${LIBRARY_LINKING_TYPE}
   src/profiles.h
   src/protocolutil.cpp
   src/protocolutil.h
+  src/qrutil.cpp
+  src/qrutil.h
   src/scopeddirlock.cpp
   src/scopeddirlock.h
   src/serialization.h
@@ -95,16 +99,21 @@ else()
   message(STATUS "Clipboard: Text")
 endif()
 
+# External dependencies
+add_subdirectory(ext/QR-Code-generator/cpp)
+add_subdirectory(ext/stb)
+add_subdirectory(ext/clip)
+
 # Common
 target_common_config(ncutil)
 
 # Headers
 target_include_directories(ncutil PRIVATE "../ncutil/src" ${MAGIC_INCLUDE_DIR})
 target_include_directories(ncutil PRIVATE "../common/src")
-target_include_directories(ncutil PRIVATE "../../ext/apathy")
-target_include_directories(ncutil PRIVATE "../../ext/sqlite_modern_cpp/hdr")
-target_include_directories(ncutil PRIVATE "../../ext/clip")
-target_include_directories(ncutil PRIVATE "../../ext/cereal/include")
+target_include_directories(ncutil PRIVATE "ext/apathy")
+target_include_directories(ncutil PRIVATE "ext/sqlite_modern_cpp/hdr")
+target_include_directories(ncutil PRIVATE "ext/clip")
+target_include_directories(ncutil PRIVATE "ext/cereal/include")
 
 # Compiler flags
 set_target_properties(ncutil PROPERTIES COMPILE_FLAGS
@@ -114,4 +123,4 @@ set_target_properties(ncutil PROPERTIES COMPILE_FLAGS
                        -Wcast-align")
 
 # Linking
-target_link_libraries(ncutil PUBLIC ${MAGIC_LIBRARY} SQLite::SQLite3 clip ${WORDEXP_LIBRARY})
+target_link_libraries(ncutil PUBLIC ${MAGIC_LIBRARY} ${SQLite3_LIBRARIES} clip qrcodegen stb ${WORDEXP_LIBRARY})

@@ -1,6 +1,6 @@
 // uimodel.h
 //
-// Copyright (c) 2019-2025 Kristofer Berggren
+// Copyright (c) 2019-2026 Kristofer Berggren
 // All rights reserved.
 //
 // nchat is distributed under the MIT license, see LICENSE for details.
@@ -62,6 +62,8 @@ private:
                             const std::string& p_FileId, DownloadFileAction p_DownloadFileAction);
     void OnKeyDeleteMsg();
     void OnKeyDeleteChat();
+    void OnKeyArchiveChat();
+    void OnKeyPinChat();
     void OnKeyOpenMsg();
     bool GetMessageAttachmentPath(std::string& p_FilePath, DownloadFileAction p_DownloadFileAction);
     void OnKeyOpenAttachment(std::string p_FilePath = std::string());
@@ -73,6 +75,13 @@ private:
     std::string OnKeySaveAttachment(std::string p_FilePath = std::string());
     void TransferFile(const std::vector<std::string>& p_FilePaths);
     void InsertEmoji(const std::wstring& p_Emoji);
+    void InsertText(const std::wstring& p_Text);
+    void RequestGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId);
+    std::vector<std::string> GetGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId);
+    bool GetChatInfoIsGroup(const std::string& p_ProfileId, const std::string& p_ChatId);
+    bool HasProtocolFeature(const std::string& p_ProfileId, ProtocolFeature p_ProtocolFeature);
+    std::map<std::string, std::string> ParseMentions(const std::string& p_ProfileId, const std::string& p_ChatId,
+                                                     const std::string& p_Text);
     void OpenCreateChat(const std::pair<std::string, std::string>& p_Chat);
     void FetchCachedMessage(const std::string& p_ProfileId, const std::string& p_ChatId,
                             const std::string& p_MsgId);
@@ -91,6 +100,7 @@ private:
     std::string GetContactListName(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_AllowId,
                                    bool p_AllowAlias);
     std::string GetContactPhone(const std::string& p_ProfileId, const std::string& p_ChatId);
+    bool IsContactSelf(const std::string& p_ProfileId, const std::string& p_ContactId);
     int64_t GetLastMessageTime(const std::string& p_ProfileId, const std::string& p_ChatId);
     bool GetChatIsUnread(const std::string& p_ProfileId, const std::string& p_ChatId);
     std::string GetChatStatus(const std::string& p_ProfileId, const std::string& p_ChatId);
@@ -102,6 +112,7 @@ private:
     std::vector<std::pair<std::string, std::string>>& GetChatVecLock();
     std::unordered_map<std::string, std::unordered_map<std::string, ContactInfo>> GetContactInfos();
     int64_t GetContactInfosUpdateTime();
+    int64_t GetGroupMembersUpdateTime();
     std::pair<std::string, std::string>& GetCurrentChat();
     bool IsCurrentChat(const std::string& p_ProfileId, const std::string& p_ChatId);
     int& GetCurrentChatIndex();
@@ -144,11 +155,16 @@ private:
 
     bool IsMultipleProfiles();
     std::string GetProfileDisplayName(const std::string& p_ProfileId);
+    std::string GetProfileSuffix(const std::string& p_ProfileId);
     void GetAvailableEmojis(std::set<std::string>& p_AvailableEmojis, bool& p_Pending);
     void OnKeyJumpQuoted();
+    void OnKeyJumpPinned();
+    void OnKeyPinMsg();
 
     void Draw();
     void ReinitView();
+    void TerminalControlPause();
+    void TerminalControlResume();
 
     void OnKeyQuit();
     void OnKeyExtEdit();
@@ -209,7 +225,6 @@ private:
     void CallExternalEdit(const std::string& p_EditorCmd);
     const std::pair<std::string, std::string>& GetNextChat();
     void SendProtocolRequest(const std::string& p_ProfileId, std::shared_ptr<RequestMessage> p_Request);
-    bool HasProtocolFeature(const std::string& p_ProfileId, ProtocolFeature p_ProtocolFeature);
     std::string GetSelfId(const std::string& p_ProfileId);
     void Quit();
     void EntryConvertEmojiEnabled();
@@ -222,6 +237,8 @@ private:
   private:
     bool m_Running = true;
     std::shared_ptr<UiView> m_View;
+    int m_TermLines = 0;
+    int m_TermCols = 0;
 
     std::unordered_map<std::string, std::shared_ptr<Protocol>> m_Protocols;
 
@@ -262,6 +279,9 @@ private:
     std::unordered_map<std::string, std::unordered_map<std::string, bool>> m_UserOnline;
     std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> m_UserTimeSeen;
 
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::string>>> m_GroupMembers;
+    int64_t m_GroupMembersUpdateTime = 0;
+
     std::unordered_map<std::string, std::unordered_map<std::string, std::set<std::string>>> m_AvailableReactions;
     std::unordered_map<std::string, std::unordered_map<std::string, bool>> m_AvailableReactionsPending;
 
@@ -291,6 +311,7 @@ public:
   void AddProtocol(std::shared_ptr<Protocol> p_Protocol);
   std::unordered_map<std::string, std::shared_ptr<Protocol>> GetProtocols();
   bool IsMultipleProfiles();
+  std::string GetProfileSuffix(const std::string& p_ProfileId);
 
   void Draw();
   void KeyHandler(wint_t p_Key);
@@ -304,10 +325,14 @@ public:
   std::vector<std::pair<std::string, std::string>> GetChatVec();
   std::string GetContactListName(const std::string& p_ProfileId, const std::string& p_ChatId, bool p_AllowId,
                                  bool p_AllowAlias);
+  bool IsContactSelf(const std::string& p_ProfileId, const std::string& p_ContactId);
   std::unordered_map<std::string, std::unordered_map<std::string, ContactInfo>> GetContactInfos();
   std::string GetProfileDisplayName(const std::string& p_ProfileId);
 
   int64_t GetContactInfosUpdateTime();
+  int64_t GetGroupMembersUpdateTime();
+  void RequestGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId);
+  std::vector<std::string> GetGroupMembers(const std::string& p_ProfileId, const std::string& p_ChatId);
   bool GetEmojiEnabled();
   int GetHelpOffset();
   void SetHelpOffset(int p_HelpOffset);
@@ -341,6 +366,7 @@ public:
                                                                   const std::string& p_ChatId);
   std::vector<std::string>& GetMessageVecLocked(const std::string& p_ProfileId, const std::string& p_ChatId);
   std::string GetProfileDisplayNameLocked(const std::string& p_ProfileId);
+  std::string GetProfileSuffixLocked(const std::string& p_ProfileId);
   bool GetSelectMessageActiveLocked();
 
   void DownloadAttachmentLocked(const std::string& p_ProfileId, const std::string& p_ChatId, const std::string& p_MsgId,
@@ -380,11 +406,14 @@ private:
   bool MessageDialog(const std::string& p_Title, const std::string& p_Text, float p_WReq, float p_HReq);
   void OnKeyDeleteMsg();
   void OnKeyDeleteChat();
+  void OnKeyArchiveChat();
+  void OnKeyPin();
   void OnKeySaveAttachment();
   void OnKeyEditMsg();
   void OnKeyQuit();
   void OnKeyExtCall();
   void OnKeyAutoCompose();
+  void OnKeySelectMention();
   void OnKeyCut();
   void OnKeyCopy();
   void OnKeyPaste();

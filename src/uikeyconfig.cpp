@@ -226,18 +226,21 @@ void UiKeyConfig::Init(bool p_MapKeys)
     { "react", "\\33\\163" }, // alt/opt-s
     { "spell", "\\33\\44" }, // alt/opt-$
     { "jump_quoted", "\\33\\161" }, // alt/opt-q
+    { "jump_pinned", "KEY_CTRLP" },
     { "find", "\\33\\57" }, // alt/opt-/
     { "find_next", "\\33\\77" }, // alt/opt-?
     { "toggle_emoji", "KEY_CTRLY" },
     { "toggle_help", "KEY_CTRLG" },
     { "toggle_list", "KEY_CTRLL" },
-    { "toggle_top", "KEY_CTRLP" },
+    { "toggle_top", "KEY_NONE" },
     { "next_chat", "KEY_TAB" },
     { "prev_chat", "KEY_BTAB" },
     { "unread_chat", "KEY_CTRLF" },
     { "send_msg", "KEY_CTRLX" },
     { "delete_msg", "KEY_CTRLD" },
     { "delete_chat", "\\33\\144" }, // alt/opt-d
+    { "archive_chat", "\\33\\141" }, // alt/opt-a
+    { "pin", "\\33\\160" }, // alt/opt-p
     { "open", "KEY_CTRLV" },
     { "open_link", "KEY_CTRLW" },
     { "open_msg", "\\33\\167" }, // alt/opt-w
@@ -254,6 +257,7 @@ void UiKeyConfig::Init(bool p_MapKeys)
     { "terminal_focus_out", "KEY_FOCUS_OUT" },
     { "terminal_resize", "KEY_RESIZE" },
     { "auto_compose", "\\33\\151" }, // alt/opt-i
+    { "select_mention", "\\33\\62" }, // alt/opt-2
     { "tab", "\\33\\11" }, // alt/opt-tab
   };
 

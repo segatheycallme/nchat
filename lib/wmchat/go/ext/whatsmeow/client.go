@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"go.mau.fi/util/ptr"
 	"go.mau.fi/util/random"
 	"golang.org/x/net/proxy"
+	"golang.org/x/sync/semaphore"
 
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"
@@ -89,6 +91,7 @@ type Client struct {
 	// EmitAppStateEventsOnFullSync can be set to true if you want to get app state events emitted
 	// even when re-syncing the whole state.
 	EmitAppStateEventsOnFullSync bool
+	AppStateDebugLogs            bool
 
 	AutomaticMessageRerequestFromPhone bool
 	pendingPhoneRerequests             map[types.MessageID]context.CancelFunc
@@ -97,9 +100,10 @@ type Client struct {
 	appStateProc     *appstate.Processor
 	appStateSyncLock sync.Mutex
 
-	historySyncNotifications  chan *waE2E.HistorySyncNotification
-	historySyncHandlerStarted atomic.Bool
-	ManualHistorySyncDownload bool
+	historySyncNotifications        chan *waE2E.HistorySyncNotification
+	historySyncHandlerStarted       atomic.Bool
+	ManualHistorySyncDownload       bool
+	DisableManualHistorySyncReceipt bool
 
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
@@ -117,6 +121,7 @@ type Client struct {
 
 	messageRetries     map[string]int
 	messageRetriesLock sync.Mutex
+	retrySema          *semaphore.Weighted
 
 	incomingRetryRequestCounter     map[incomingRetryKey]int
 	incomingRetryRequestCounterLock sync.Mutex
@@ -125,6 +130,12 @@ type Client struct {
 	appStateKeyRequestsLock sync.RWMutex
 
 	messageSendLock sync.Mutex
+
+	tcTokenSenderTS            map[types.JID]time.Time
+	tcTokenSenderTSLock        sync.Mutex
+	lastTCTokenSenderTSCleanup time.Time
+	tcTokenDBPruneLock         sync.Mutex
+	lastTCTokenDBPrune         time.Time
 
 	privacySettingsCache atomic.Value
 
@@ -142,10 +153,16 @@ type Client struct {
 	sessionRecreateHistoryLock sync.Mutex
 	// GetMessageForRetry is used to find the source message for handling retry receipts
 	// when the message is not found in the recently sent message cache.
+	// Note: in DMs, the "to" field may be different from what you originally sent to (LID vs phone number),
+	// make sure to check both if necessary.
 	GetMessageForRetry func(requester, to types.JID, id types.MessageID) *waE2E.Message
 	// PreRetryCallback is called before a retry receipt is accepted.
 	// If it returns false, the accepting will be cancelled and the retry receipt will be ignored.
 	PreRetryCallback func(receipt *events.Receipt, id types.MessageID, retryCount int, msg *waE2E.Message) bool
+	// Should whatsmeow store recently sent messages in the database so that retry receipts can be accepted
+	// even if the process is restarted? If false, only the in-memory cache and GetMessageForRetry will be used.
+	UseRetryMessageStore bool
+	lastRetryStoreClear  time.Time
 
 	// PrePairCallback is called before pairing is completed. If it returns false, the pairing will be cancelled and
 	// the client will disconnect.
@@ -154,6 +171,7 @@ type Client struct {
 	// GetClientPayload is called to get the client payload for connecting to the server.
 	// This should NOT be used for WhatsApp (to change the OS name, update fields in store.BaseClientPayload directly).
 	GetClientPayload func() *waWa6.ClientPayload
+	QRClientType     PairClientType
 
 	// Should untrusted identity errors be handled automatically? If true, the stored identity and existing signal
 	// sessions will be removed on untrusted identity errors, and an events.IdentityChange will be dispatched.
@@ -171,6 +189,8 @@ type Client struct {
 
 	uniqueID  string
 	idCounter atomic.Uint64
+
+	serverTimeOffset atomic.Int64
 
 	mediaHTTP     *http.Client
 	websocketHTTP *http.Client
@@ -246,6 +266,7 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 
 		historySyncNotifications: make(chan *waE2E.HistorySyncNotification, 32),
 
+		tcTokenSenderTS:  make(map[types.JID]time.Time),
 		groupCache:       make(map[types.JID]*groupMetaCache),
 		userDevicesCache: make(map[types.JID]deviceCache),
 
@@ -393,6 +414,16 @@ func (cli *Client) SetPreLoginHTTPClient(h *http.Client) {
 	cli.preLoginHTTP = h
 }
 
+// SetMaxParallelRetryReceiptHandling sets how many retry receipts can be handled in parallel.
+// Defaults to unlimited. This should only be set before connecting, changing it afterwards can cause data races.
+func (cli *Client) SetMaxParallelRetryReceiptHandling(n int64) {
+	if n <= 0 {
+		cli.retrySema = nil
+	} else {
+		cli.retrySema = semaphore.NewWeighted(n)
+	}
+}
+
 func (cli *Client) getSocketWaitChan() <-chan struct{} {
 	cli.socketLock.RLock()
 	ch := cli.socketWait
@@ -459,10 +490,12 @@ func isRetryableConnectError(err error) bool {
 		switch statusErr.StatusCode {
 		case 408, 500, 501, 502, 503, 504:
 			return true
+		default:
+			return false
 		}
 	}
 
-	return false
+	return errors.Is(err, socket.ErrDialFailed)
 }
 
 func (cli *Client) ConnectContext(ctx context.Context) error {
@@ -491,6 +524,9 @@ func (cli *Client) connect(ctx context.Context) error {
 }
 
 func (cli *Client) unlockedConnect(ctx context.Context) error {
+	if cli.Store.Deleted {
+		return store.ErrDeviceDeleted
+	}
 	if cli.socket != nil {
 		if !cli.socket.IsConnected() {
 			cli.unlockedDisconnect()
@@ -971,5 +1007,38 @@ func (cli *Client) StoreLIDPNMapping(ctx context.Context, first, second types.JI
 	err := cli.Store.LIDs.PutLIDMapping(ctx, lid, pn)
 	if err != nil {
 		cli.Log.Errorf("Failed to store LID-PN mapping for %s -> %s: %v", lid, pn, err)
+	}
+}
+
+const unifiedOffset = 3 * 24 * time.Hour
+const week = 7 * 24 * time.Hour
+
+func (cli *Client) getUnifiedSessionID() string {
+	unifiedTS := time.Now().
+		Add(time.Duration(cli.serverTimeOffset.Load())).
+		Add(unifiedOffset)
+	unifiedID := unifiedTS.UnixMilli() % week.Milliseconds()
+	return strconv.FormatInt(unifiedID, 10)
+}
+
+func (cli *Client) sendUnifiedSession() {
+	if cli == nil {
+		return
+	}
+
+	node := waBinary.Node{
+		Tag:   "ib",
+		Attrs: waBinary.Attrs{},
+		Content: []waBinary.Node{{
+			Tag: "unified_session",
+			Attrs: waBinary.Attrs{
+				"id": cli.getUnifiedSessionID(),
+			},
+		}},
+	}
+
+	err := cli.sendNode(cli.BackgroundEventCtx, node)
+	if err != nil {
+		cli.Log.Debugf("Failed to send unified_session telemetry: %v", err)
 	}
 }

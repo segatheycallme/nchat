@@ -66,6 +66,25 @@ bool SgChat::HasFeature(ProtocolFeature p_ProtocolFeature) const
   return (p_ProtocolFeature & customFeatures);
 }
 
+bool SgChat::IsGroupChat(const std::string& p_ChatId) const
+{
+  // Signal 1-on-1 chats use UUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+  // Groups use non-UUID identifiers
+  if (p_ChatId.size() != 36) return true;
+  for (size_t i = 0; i < p_ChatId.size(); ++i)
+  {
+    if (i == 8 || i == 13 || i == 18 || i == 23)
+    {
+      if (p_ChatId[i] != '-') return true;
+    }
+    else
+    {
+      if (!std::isxdigit(static_cast<unsigned char>(p_ChatId[i]))) return true;
+    }
+  }
+  return false;
+}
+
 std::string SgChat::GetSelfId() const
 {
   std::unique_lock<std::mutex> lock(m_Mutex);
@@ -328,7 +347,6 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         std::shared_ptr<GetChatsRequest> getChatsRequest =
           std::static_pointer_cast<GetChatsRequest>(p_RequestMessage);
         MessageCache::FetchChats(m_ProfileId, getChatsRequest->chatIds);
-        CSgGetChats(m_ConnId);
       }
       break;
 
@@ -393,12 +411,14 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
           fileType = fileInfo.fileType;
         }
 
+        std::string mentionsJson = ProtocolUtil::MentionsToJson(sendMessageRequest->chatMessage.mentions);
+
         int rv =
           CSgSendMessage(m_ConnId, const_cast<char*>(chatId.c_str()), const_cast<char*>(text.c_str()),
                          const_cast<char*>(quotedId.c_str()), const_cast<char*>(quotedText.c_str()),
                          const_cast<char*>(quotedSender.c_str()), const_cast<char*>(filePath.c_str()),
                          const_cast<char*>(fileType.c_str()), const_cast<char*>(editMsgId.c_str()),
-                         editMsgSent);
+                         editMsgSent, const_cast<char*>(mentionsJson.c_str()));
         Status::Clear(m_ProfileId, Status::FlagSending);
 
         std::shared_ptr<SendMessageNotify> sendMessageNotify = std::make_shared<SendMessageNotify>(m_ProfileId);
@@ -432,11 +452,13 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
           fileType = fileInfo.fileType;
         }
 
+        std::string editMentionsJson = ProtocolUtil::MentionsToJson(editMessageRequest->chatMessage.mentions);
+
         CSgSendMessage(m_ConnId, const_cast<char*>(chatId.c_str()), const_cast<char*>(text.c_str()),
                        const_cast<char*>(quotedId.c_str()), const_cast<char*>(quotedText.c_str()),
                        const_cast<char*>(quotedSender.c_str()), const_cast<char*>(filePath.c_str()),
                        const_cast<char*>(fileType.c_str()), const_cast<char*>(editMsgId.c_str()),
-                       editMsgSent);
+                       editMsgSent, const_cast<char*>(editMentionsJson.c_str()));
         Status::Clear(m_ProfileId, Status::FlagSending);
       }
       break;
@@ -482,6 +504,7 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         deleteMessageNotify->success = true;
         deleteMessageNotify->chatId = deleteMessageRequest->chatId;
         deleteMessageNotify->msgId = deleteMessageRequest->msgId;
+        deleteMessageNotify->isOutgoing = true;
         CallMessageHandler(deleteMessageNotify);
       }
       break;
@@ -501,6 +524,34 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
         deleteChatNotify->success = true;
         deleteChatNotify->chatId = deleteChatRequest->chatId;
         CallMessageHandler(deleteChatNotify);
+      }
+      break;
+
+    case ArchiveChatRequestType:
+      {
+        LOG_DEBUG("archive chat");
+        Status::Set(m_ProfileId, Status::FlagUpdating);
+        std::shared_ptr<ArchiveChatRequest> archiveChatRequest =
+          std::static_pointer_cast<ArchiveChatRequest>(p_RequestMessage);
+        std::string chatId = archiveChatRequest->chatId;
+        int32_t isArchived = archiveChatRequest->isArchived ? 1 : 0;
+
+        CSgArchiveChat(m_ConnId, const_cast<char*>(chatId.c_str()), isArchived);
+        Status::Clear(m_ProfileId, Status::FlagUpdating);
+      }
+      break;
+
+    case PinChatRequestType:
+      {
+        LOG_DEBUG("pin chat");
+        Status::Set(m_ProfileId, Status::FlagUpdating);
+        std::shared_ptr<PinChatRequest> pinChatRequest =
+          std::static_pointer_cast<PinChatRequest>(p_RequestMessage);
+        std::string chatId = pinChatRequest->chatId;
+        int32_t isPinned = pinChatRequest->isPinned ? 1 : 0;
+
+        CSgPinChat(m_ConnId, const_cast<char*>(chatId.c_str()), isPinned);
+        Status::Clear(m_ProfileId, Status::FlagUpdating);
       }
       break;
 
@@ -627,7 +678,18 @@ void SgChat::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessage)
                                   findMessageRequest->fromMsgId,
                                   findMessageRequest->lastMsgId,
                                   findMessageRequest->findText,
-                                  findMessageRequest->findMsgId);
+                                  findMessageRequest->findMsgId,
+                                  findMessageRequest->findPinned);
+      }
+      break;
+
+    case GetGroupMembersRequestType:
+      {
+        LOG_DEBUG("get group members");
+        std::shared_ptr<GetGroupMembersRequest> getGroupMembersRequest =
+          std::static_pointer_cast<GetGroupMembersRequest>(p_RequestMessage);
+        std::string chatId = getGroupMembersRequest->chatId;
+        CSgGetGroupMembers(m_ConnId, const_cast<char*>(chatId.c_str()));
       }
       break;
 
@@ -809,7 +871,7 @@ void SgNewContactsNotify(int p_ConnId, char* p_ChatId, char* p_Name, char* p_Pho
 }
 
 void SgNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMuted, int p_IsPinned,
-                      int p_LastMessageTime)
+                      int p_IsArchived, int p_LastMessageTime)
 {
   SgChat* instance = SgChat::GetInstance(p_ConnId);
   if (instance != nullptr)
@@ -820,6 +882,7 @@ void SgNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMute
     chatInfo.isUnreadMention = false;
     chatInfo.isMuted = (p_IsMuted == 1);
     chatInfo.isPinned = (p_IsPinned == 1);
+    chatInfo.isArchived = (p_IsArchived == 1);
     chatInfo.lastMessageTime = ((int64_t)p_LastMessageTime) * 1000;
 
     std::shared_ptr<NewChatsNotify> newChatsNotify = std::make_shared<NewChatsNotify>(instance->GetProfileId());
@@ -832,6 +895,27 @@ void SgNewChatsNotify(int p_ConnId, char* p_ChatId, int p_IsUnread, int p_IsMute
   }
 
   free(p_ChatId);
+}
+
+void SgNewGroupMembersNotify(int p_ConnId, char* p_ChatId, char* p_MembersJson)
+{
+  SgChat* instance = SgChat::GetInstance(p_ConnId);
+  if (instance != nullptr)
+  {
+    std::shared_ptr<NewGroupMembersNotify> notify =
+      std::make_shared<NewGroupMembersNotify>(instance->GetProfileId());
+    notify->chatId = std::string(p_ChatId);
+
+    std::string json = std::string(p_MembersJson);
+    notify->contactInfos = ProtocolUtil::ContactInfosFromJson(json);
+
+    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+    deferNotifyRequest->serviceMessage = notify;
+    instance->SendRequest(deferNotifyRequest);
+  }
+
+  free(p_ChatId);
+  free(p_MembersJson);
 }
 
 void SgNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe,
@@ -849,6 +933,7 @@ void SgNewMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_Se
     chatMessage.quotedId = std::string(p_ReplyId);
     chatMessage.timeSent = (((int64_t)p_TimeSent) * 1000) + (std::hash<std::string>{ }(chatMessage.id) % 256);
     chatMessage.isRead = (p_IsRead == 1);
+    chatMessage.isEdited = (p_IsEdited == 1);
 
     if (p_IsEdited)
     {
@@ -901,7 +986,6 @@ void SgNewHistoryMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, cha
                                 int p_FromMe, char* p_QuotedId, char* p_FileId, char* p_FilePath, int p_FileStatus,
                                 int p_TimeSent, int p_IsRead, int p_IsEdited, char* p_FromMsgId, int p_Notify)
 {
-  (void)p_IsEdited;
   SgChat* instance = SgChat::GetInstance(p_ConnId);
   if (instance != nullptr)
   {
@@ -917,6 +1001,7 @@ void SgNewHistoryMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, cha
       chatMessage.quotedId = std::string(p_QuotedId);
       chatMessage.timeSent = (((int64_t)p_TimeSent) * 1000) + (std::hash<std::string>{ }(chatMessage.id) % 256);
       chatMessage.isRead = (p_IsRead == 1);
+      chatMessage.isEdited = (p_IsEdited == 1);
 
       std::string fileId = std::string(p_FileId);
       if (!fileId.empty())
@@ -940,6 +1025,7 @@ void SgNewHistoryMessagesNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, cha
       chatMessage.quotedId = std::string(p_QuotedId);
       chatMessage.timeSent = (((int64_t)p_TimeSent) * 1000) + (std::hash<std::string>{ }(chatMessage.id) % 256);
       chatMessage.isRead = (p_IsRead == 1);
+      chatMessage.isEdited = (p_IsEdited == 1);
 
       std::string fileId = std::string(p_FileId);
       if (!fileId.empty())
@@ -1118,20 +1204,64 @@ void SgDeleteChatNotify(int p_ConnId, char* p_ChatId)
   free(p_ChatId);
 }
 
-void SgDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId)
+void SgDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsOutgoing)
 {
   SgChat* instance = SgChat::GetInstance(p_ConnId);
   if (instance != nullptr)
   {
-    std::shared_ptr<DeleteMessageNotify> deleteMessageNotify =
-      std::make_shared<DeleteMessageNotify>(instance->GetProfileId());
-    deleteMessageNotify->success = true;
-    deleteMessageNotify->chatId = std::string(p_ChatId);
-    deleteMessageNotify->msgId = std::string(p_MsgId);
+    static const int messageDelete = AppConfig::GetNum("message_delete");
+    const bool isOutgoing = (p_IsOutgoing != 0);
 
-    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
-    deferNotifyRequest->serviceMessage = deleteMessageNotify;
-    instance->SendRequest(deferNotifyRequest);
+    if (!isOutgoing &&
+        ((messageDelete == MessageDeleteReplace) || (messageDelete == MessageDeletePrefix)))
+    {
+      std::vector<ChatMessage> chatMessages;
+      if (MessageCache::GetOneMessage(instance->GetProfileId(), std::string(p_ChatId), std::string(p_MsgId),
+                                      chatMessages))
+      {
+        ChatMessage chatMessage = chatMessages.front();
+        chatMessage.isRead = true;
+        chatMessage.isDeleted = true;
+
+        if (messageDelete == MessageDeleteReplace)
+        {
+          chatMessage.text = std::string("[This message was deleted]");
+          chatMessage.fileInfo.clear();
+        }
+        else // MessageDeletePrefix
+        {
+          if (!StrUtil::StartsWith(chatMessage.text, "[This message was deleted]"))
+          {
+            chatMessage.text = std::string("[This message was deleted]\n") + chatMessage.text;
+          }
+        }
+
+        std::shared_ptr<NewMessagesNotify> newMessagesNotify =
+          std::make_shared<NewMessagesNotify>(instance->GetProfileId());
+        newMessagesNotify->success = true;
+        newMessagesNotify->chatId = std::string(p_ChatId);
+        newMessagesNotify->chatMessages = std::vector<ChatMessage>({ chatMessage });
+        newMessagesNotify->cached = false;
+        newMessagesNotify->sequence = true;
+
+        std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+        deferNotifyRequest->serviceMessage = newMessagesNotify;
+        instance->SendRequest(deferNotifyRequest);
+      }
+    }
+    else // erase: mode 1, or any self-deletion
+    {
+      std::shared_ptr<DeleteMessageNotify> deleteMessageNotify =
+        std::make_shared<DeleteMessageNotify>(instance->GetProfileId());
+      deleteMessageNotify->success = true;
+      deleteMessageNotify->chatId = std::string(p_ChatId);
+      deleteMessageNotify->msgId = std::string(p_MsgId);
+      deleteMessageNotify->isOutgoing = isOutgoing;
+
+      std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+      deferNotifyRequest->serviceMessage = deleteMessageNotify;
+      instance->SendRequest(deferNotifyRequest);
+    }
   }
 
   free(p_ChatId);
@@ -1149,6 +1279,25 @@ void SgUpdateMuteNotify(int p_ConnId, char* p_ChatId, int p_IsMuted)
 
     std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
     deferNotifyRequest->serviceMessage = updateMuteNotify;
+    instance->SendRequest(deferNotifyRequest);
+  }
+
+  free(p_ChatId);
+}
+
+void SgUpdateArchivedNotify(int p_ConnId, char* p_ChatId, int p_IsArchived)
+{
+  SgChat* instance = SgChat::GetInstance(p_ConnId);
+  if (instance != nullptr)
+  {
+    std::shared_ptr<UpdateArchivedNotify> updateArchivedNotify =
+      std::make_shared<UpdateArchivedNotify>(instance->GetProfileId());
+    updateArchivedNotify->success = true;
+    updateArchivedNotify->chatId = std::string(p_ChatId);
+    updateArchivedNotify->isArchived = p_IsArchived;
+
+    std::shared_ptr<DeferNotifyRequest> deferNotifyRequest = std::make_shared<DeferNotifyRequest>();
+    deferNotifyRequest->serviceMessage = updateArchivedNotify;
     instance->SendRequest(deferNotifyRequest);
   }
 
@@ -1212,7 +1361,7 @@ void SgClearStatus(int p_ConnId, int p_Flags)
 
 int SgAppConfigGetNum(char* p_Param)
 {
-  int value = AppConfig::GetBool(std::string(p_Param)) ? 1 : 0;
+  int value = AppConfig::GetNum(std::string(p_Param));
   free(p_Param);
   return value;
 }

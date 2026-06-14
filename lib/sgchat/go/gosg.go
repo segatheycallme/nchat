@@ -44,7 +44,7 @@ import (
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
 )
 
-var signalDate int = 20260129
+var signalDate int = 20260519
 
 type State int64
 
@@ -57,6 +57,7 @@ const (
 
 var (
 	mx          sync.Mutex
+	nextConnId  int                                            = 0
 	clients     map[int]*signalmeow.Client                     = make(map[int]*signalmeow.Client)
 	devices     map[int]*store.Device                          = make(map[int]*store.Device)
 	containers  map[int]*store.Container                       = make(map[int]*store.Container)
@@ -68,6 +69,7 @@ var (
 	pinnedChats map[int]map[string]bool                        = make(map[int]map[string]bool)
 	mutedChats  map[int]map[string]bool                        = make(map[int]map[string]bool)
 	recentMsgs  map[int]map[string][]recentMessage             = make(map[int]map[string][]recentMessage)
+	stateStore  map[int]map[string]string                      = make(map[int]map[string]string)
 )
 
 const maxRecentMessages = 5
@@ -76,6 +78,11 @@ type recentMessage struct {
 	senderACI string
 	timestamp uint64
 }
+
+// keep in sync with enum AttachmentSendType in appconfig.h
+var AttachmentSendAsDocument = 0
+var AttachmentSendAsType = 1
+var AttachmentSendAsSticker = 2
 
 // keep in sync with enum FileStatus in protocol.h
 var FileStatusNone = -1
@@ -100,9 +107,46 @@ var NotifyDirect = 0
 var NotifyCache = 1
 var NotifySendCached = 2
 
+func SaveMap(path string, m map[string]string) error {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+func LoadMap(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return make(map[string]string), err
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(map[string]string), err
+	}
+	return m, nil
+}
+
+func GetStateStorePath(connPath string) string {
+	return connPath + "/state.dat"
+}
+
+func GetChatsSynced(connId int) bool {
+	mx.Lock()
+	defer mx.Unlock()
+	return stateStore[connId]["chats_synced"] == "1"
+}
+
+func SetChatsSynced(connId int, isChatsSynced bool) {
+	mx.Lock()
+	defer mx.Unlock()
+	stateStore[connId]["chats_synced"] = strconv.Itoa(BoolToInt(isChatsSynced))
+}
+
 func AddConn(client *signalmeow.Client, device *store.Device, container *store.Container, path string) int {
 	mx.Lock()
-	var connId int = len(clients)
+	var connId int = nextConnId
+	nextConnId++
 	clients[connId] = client
 	devices[connId] = device
 	containers[connId] = container
@@ -114,12 +158,14 @@ func AddConn(client *signalmeow.Client, device *store.Device, container *store.C
 	pinnedChats[connId] = make(map[string]bool)
 	mutedChats[connId] = make(map[string]bool)
 	recentMsgs[connId] = make(map[string][]recentMessage)
+	stateStore[connId], _ = LoadMap(GetStateStorePath(path))
 	mx.Unlock()
 	return connId
 }
 
 func RemoveConn(connId int) {
 	mx.Lock()
+	SaveMap(GetStateStorePath(paths[connId]), stateStore[connId])
 	delete(clients, connId)
 	delete(devices, connId)
 	delete(containers, connId)
@@ -131,6 +177,7 @@ func RemoveConn(connId int) {
 	delete(pinnedChats, connId)
 	delete(mutedChats, connId)
 	delete(recentMsgs, connId)
+	delete(stateStore, connId)
 	mx.Unlock()
 }
 
@@ -292,7 +339,10 @@ func AttachmentToFileId(attachment *signalpb.AttachmentPointer, targetPath strin
 func DownloadFromFileId(connId int, fileId string) (string, int) {
 	LOG_TRACE(fmt.Sprintf("fileId %s", fileId))
 	var info DownloadInfo
-	json.Unmarshal([]byte(fileId), &info)
+	if err := json.Unmarshal([]byte(fileId), &info); err != nil {
+		LOG_WARNING(fmt.Sprintf("unmarshal fileId failed: %v", err))
+		return "", FileStatusDownloadFailed
+	}
 	if info.Version != downloadInfoVersion {
 		LOG_WARNING(fmt.Sprintf("unsupported version %d", info.Version))
 		return "", FileStatusDownloadFailed
@@ -323,7 +373,7 @@ func DownloadFromFileId(connId int, fileId string) (string, int) {
 			attachmentPointer.AttachmentIdentifier = &signalpb.AttachmentPointer_CdnKey{CdnKey: info.CdnKey}
 		}
 
-		data, err := signalmeow.DownloadAttachmentWithPointer(ctx, attachmentPointer, info.PlaintextHash)
+		data, err := signalmeow.DownloadAttachmentWithPointer(ctx, attachmentPointer, info.PlaintextHash, nil)
 		if err != nil {
 			LOG_WARNING(fmt.Sprintf("download error %#v", err))
 			fileStatus = FileStatusDownloadFailed
@@ -626,6 +676,9 @@ func ProcessFormattedText(connId int, text string, bodyRanges []*signalpb.BodyRa
 
 	// Apply back-to-front
 	for _, op := range ops {
+		if op.bytePos > len(text) || op.bytePos+op.byteLen > len(text) {
+			continue
+		}
 		text = text[:op.bytePos] + op.insertText + text[op.bytePos+op.byteLen:]
 	}
 
@@ -678,12 +731,14 @@ func ProcessBackupFormattedText(connId int, text string, bodyRanges []*backuppb.
 	})
 
 	for _, op := range ops {
+		if op.bytePos > len(text) || op.bytePos+op.byteLen > len(text) {
+			continue
+		}
 		text = text[:op.bytePos] + op.insertText + text[op.bytePos+op.byteLen:]
 	}
 
 	return text
 }
-
 
 func ParseMarkdown(text string) (string, []*signalpb.BodyRange) {
 	type markerPair struct {
@@ -779,6 +834,138 @@ func ParseMarkdown(text string) (string, []*signalpb.BodyRange) {
 	}
 
 	return strippedText, bodyRanges
+}
+
+// ProcessMentionsForSend replaces @Name and @[Name] with U+FFFC in text
+// and returns the modified text plus BodyRanges for mentions.
+// Must be called AFTER ParseMarkdown since it works on the stripped text.
+func ProcessMentionsForSend(text string, mentionsJson string) (string, []*signalpb.BodyRange) {
+	if mentionsJson == "" || mentionsJson == "{}" {
+		return text, nil
+	}
+
+	var mentions map[string]string
+	if err := json.Unmarshal([]byte(mentionsJson), &mentions); err != nil {
+		LOG_WARNING(fmt.Sprintf("unmarshal mentions err %#v", err))
+		return text, nil
+	}
+
+	var mentionRanges []*signalpb.BodyRange
+
+	// Process mentions in reverse order of position to keep offsets valid
+	type mentionPos struct {
+		byteStart int
+		byteEnd   int
+		name      string
+		userId    string
+	}
+	var positions []mentionPos
+
+	pos := 0
+	for pos < len(text) {
+		atIdx := strings.Index(text[pos:], "@")
+		if atIdx == -1 {
+			break
+		}
+		atIdx += pos
+
+		var name, userId string
+		var fullEnd int
+
+		if atIdx+1 < len(text) && text[atIdx+1] == '[' {
+			// @[Name With Spaces] pattern
+			closeBracket := strings.Index(text[atIdx+2:], "]")
+			if closeBracket != -1 {
+				closeBracket += atIdx + 2
+				candidate := text[atIdx+2 : closeBracket]
+				if uid, ok := mentions[candidate]; ok {
+					name = candidate
+					userId = uid
+					fullEnd = closeBracket + 1
+				}
+			}
+		}
+
+		if name == "" && atIdx+1 < len(text) {
+			// @Name pattern
+			end := atIdx + 1
+			for end < len(text) && text[end] != ' ' && text[end] != '\n' && text[end] != '\t' && text[end] != '@' {
+				end++
+			}
+			if end > atIdx+1 {
+				candidate := text[atIdx+1 : end]
+				if uid, ok := mentions[candidate]; ok {
+					name = candidate
+					userId = uid
+					fullEnd = end
+				} else {
+					// Trim trailing punctuation and retry
+					trimmed := strings.TrimRight(candidate, ".,!?:;")
+					if trimmed != candidate {
+						if uid2, ok2 := mentions[trimmed]; ok2 {
+							name = trimmed
+							userId = uid2
+							fullEnd = atIdx + 1 + len(trimmed)
+						}
+					}
+				}
+			}
+		}
+
+		if name != "" {
+			positions = append(positions, mentionPos{
+				byteStart: atIdx,
+				byteEnd:   fullEnd,
+				name:      name,
+				userId:    userId,
+			})
+			pos = fullEnd
+		} else {
+			pos = atIdx + 1
+		}
+	}
+
+	// Build result string forward, computing UTF-16 offsets as we go
+	var result strings.Builder
+	utf16Pos := 0
+	prevEnd := 0
+
+	for _, mp := range positions {
+		// Append text between previous mention and this one
+		between := text[prevEnd:mp.byteStart]
+		result.WriteString(between)
+		for _, r := range between {
+			if r >= 0x10000 {
+				utf16Pos += 2
+			} else {
+				utf16Pos++
+			}
+		}
+
+		// Record UTF-16 offset, then append U+FFFC replacement
+		startU32 := uint32(utf16Pos)
+		lengthU32 := uint32(1) // U+FFFC is 1 UTF-16 code unit
+		mentionRanges = append(mentionRanges, &signalpb.BodyRange{
+			Start:  &startU32,
+			Length: &lengthU32,
+			AssociatedValue: &signalpb.BodyRange_MentionAci{
+				MentionAci: mp.userId,
+			},
+		})
+		result.WriteString("\uFFFC")
+		utf16Pos++ // U+FFFC is 1 UTF-16 code unit
+
+		LOG_TRACE(fmt.Sprintf("mention %q userId=%s utf16Offset=%d", mp.name, mp.userId, startU32))
+		prevEnd = mp.byteEnd
+	}
+
+	// Append remaining text after last mention
+	result.WriteString(text[prevEnd:])
+	text = result.String()
+
+	LOG_TRACE(fmt.Sprintf("ProcessMentionsForSend result: %d mentions, textLen=%d", len(mentionRanges), len(text)))
+
+	return text, mentionRanges
 }
 
 func SliceIndex(list []string, value string, defaultValue int) int {
@@ -951,6 +1138,8 @@ func (handler *SgEventHandler) HandleEvent(evt events.SignalEvent) bool {
 		return handler.handlePinnedConversationsChanged(e)
 	case *events.ChatMuteChanged:
 		return handler.handleChatMuteChanged(e)
+	case *events.ChatArchivedChanged:
+		return handler.handleChatArchivedChanged(e)
 	case *events.QueueEmpty:
 		LOG_TRACE(fmt.Sprintf("QueueEmpty event"))
 		return true
@@ -974,9 +1163,35 @@ func (handler *SgEventHandler) handleChatEvent(evt *events.ChatEvent) bool {
 	senderUUID := info.Sender
 	senderId := UUIDToString(senderUUID)
 	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return true
+	}
 	selfId := UUIDToString(device.ACI)
 	fromMe := (senderId == selfId)
 	timeSent := int(info.ServerTimestamp / 1000) // Convert ms to seconds
+
+	// Resolve chat name if not already known
+	if !HasContact(connId, chatId) {
+		ctx := context.TODO()
+		chatUUID := StringToUUID(chatId)
+		if chatUUID != uuid.Nil {
+			// 1:1 chat: fetch profile name
+			profile, err := client.RetrieveProfileByID(ctx, chatUUID, 0)
+			if err == nil && profile != nil && profile.Name != "" {
+				AddContactName(connId, chatId, profile.Name)
+				CSgNewContactsNotify(connId, chatId, profile.Name, "", BoolToInt(false), BoolToInt(false), NotifyDirect)
+			}
+		} else {
+			// Group chat: fetch group title
+			groupID := types.GroupIdentifier(chatId)
+			group, _, err := client.RetrieveGroupByID(ctx, groupID, 0)
+			if err == nil && group != nil && group.Title != "" {
+				AddContactName(connId, chatId, group.Title)
+				CSgNewContactsNotify(connId, chatId, group.Title, "", BoolToInt(false), BoolToInt(false), NotifyDirect)
+			}
+		}
+	}
 
 	switch content := evt.Event.(type) {
 	case *signalpb.DataMessage:
@@ -1004,7 +1219,7 @@ func (handler *SgEventHandler) handleDataMessage(chatId string, senderId string,
 	if msg.GetDelete() != nil {
 		targetMsgId := fmt.Sprintf("%d", msg.GetDelete().GetTargetSentTimestamp())
 		LOG_TRACE(fmt.Sprintf("handleDataMessage delete %s %s", chatId, targetMsgId))
-		CSgDeleteMessageNotify(connId, chatId, targetMsgId)
+		CSgDeleteMessageNotify(connId, chatId, targetMsgId, BoolToInt(fromMe))
 		return
 	}
 
@@ -1017,7 +1232,16 @@ func (handler *SgEventHandler) handleDataMessage(chatId string, senderId string,
 	// Unsupported message type placeholders
 	placeholder := ""
 	if msg.GetSticker() != nil {
-		placeholder = "[Sticker]"
+		sticker := msg.GetSticker()
+		if sticker.GetData() != nil {
+			// Treat sticker data as a regular attachment for download
+			msg.Attachments = []*signalpb.AttachmentPointer{sticker.GetData()}
+		}
+		if sticker.GetEmoji() != "" {
+			placeholder = sticker.GetEmoji()
+		} else {
+			placeholder = "[Sticker]"
+		}
 	} else if len(msg.GetContact()) > 0 {
 		placeholder = "[Contact]"
 	} else if msg.GetPayment() != nil {
@@ -1187,7 +1411,7 @@ func (handler *SgEventHandler) handleGroupChange(chatId string, senderId string,
 			if actions.GetModifyAvatar() != nil {
 				texts = append(texts, "[Changed group avatar]")
 			}
-			if actions.GetModifyDisappearingMessagesTimer() != nil {
+			if actions.GetModifyDisappearingMessageTimer() != nil {
 				texts = append(texts, "[Changed disappearing messages timer]")
 			}
 			for _, a := range actions.GetModifyMemberRoles() {
@@ -1198,13 +1422,13 @@ func (handler *SgEventHandler) handleGroupChange(chatId string, senderId string,
 				name := GetContactName(connId, memberId)
 				texts = append(texts, "[Changed role for "+name+"]")
 			}
-			for range actions.GetAddPendingMembers() {
+			for range actions.GetAddMembersPendingProfileKey() {
 				texts = append(texts, "[Invited a member]")
 			}
-			for range actions.GetDeletePendingMembers() {
+			for range actions.GetDeleteMembersPendingProfileKey() {
 				texts = append(texts, "[Invitation revoked]")
 			}
-			for _, a := range actions.GetPromotePendingMembers() {
+			for _, a := range actions.GetPromoteMembersPendingProfileKey() {
 				memberId := ""
 				if gsp != nil {
 					memberId = decryptGroupMemberUUID(gsp, a.GetUserId())
@@ -1212,13 +1436,13 @@ func (handler *SgEventHandler) handleGroupChange(chatId string, senderId string,
 				name := GetContactName(connId, memberId)
 				texts = append(texts, "["+name+" accepted invite]")
 			}
-			for range actions.GetAddRequestingMembers() {
+			for range actions.GetAddMembersPendingAdminApproval() {
 				texts = append(texts, "[Member requested to join]")
 			}
-			for range actions.GetDeleteRequestingMembers() {
+			for range actions.GetDeleteMembersPendingAdminApproval() {
 				texts = append(texts, "[Join request denied]")
 			}
-			for _, a := range actions.GetPromoteRequestingMembers() {
+			for _, a := range actions.GetPromoteMembersPendingAdminApproval() {
 				memberId := ""
 				if gsp != nil {
 					memberId = decryptGroupMemberUUID(gsp, a.GetUserId())
@@ -1368,7 +1592,10 @@ func (handler *SgEventHandler) handleContactList(evt *events.ContactList) bool {
 		if name == "" {
 			name = contact.E164
 		}
-		phone := contact.E164
+		if name == "" {
+			continue
+		}
+		phone := strings.TrimPrefix(contact.E164, "+")
 		isSelf := false
 		isAlias := false
 
@@ -1379,7 +1606,7 @@ func (handler *SgEventHandler) handleContactList(evt *events.ContactList) bool {
 
 	// Add self as contact
 	selfName := "You"
-	selfPhone := device.Number
+	selfPhone := strings.TrimPrefix(device.Number, "+")
 	isSelf := BoolToInt(true)
 	isAlias := BoolToInt(false)
 	//notify = NotifySendCached
@@ -1412,10 +1639,31 @@ func (handler *SgEventHandler) handleDeleteForMe(evt *events.DeleteForMe) bool {
 			continue
 		}
 
+		// Delete from local backup store
+		client := GetClient(connId)
+		if client != nil && client.Store.BackupStore != nil {
+			ctx := context.TODO()
+			var backupChat *store.BackupChat
+			chatUUID := StringToUUID(chatIdStr)
+			if chatUUID != uuid.Nil {
+				backupChat, _ = client.Store.BackupStore.GetBackupChatByUserID(ctx, libsignalgo.NewACIServiceID(chatUUID))
+			} else {
+				backupChat, _ = client.Store.BackupStore.GetBackupChatByGroupID(ctx, types.GroupIdentifier(chatIdStr))
+			}
+			if backupChat != nil {
+				for _, msg := range msgDelete.GetMessages() {
+					err := client.Store.BackupStore.DeleteBackupChatItem(ctx, backupChat.Id, msg.GetSentTimestamp())
+					if err != nil {
+						LOG_WARNING(fmt.Sprintf("delete backup chat item failed: %v", err))
+					}
+				}
+			}
+		}
+
 		for _, msg := range msgDelete.GetMessages() {
 			msgId := fmt.Sprintf("%d", msg.GetSentTimestamp())
 			LOG_TRACE(fmt.Sprintf("Call CSgDeleteMessageNotify %s %s", chatIdStr, msgId))
-			CSgDeleteMessageNotify(connId, chatIdStr, msgId)
+			CSgDeleteMessageNotify(connId, chatIdStr, msgId, BoolToInt(true))
 		}
 	}
 
@@ -1499,6 +1747,12 @@ func (handler *SgEventHandler) handlePinnedConversationsChanged(evt *events.Pinn
 		switch id := pc.GetIdentifier().(type) {
 		case *signalpb.AccountRecord_PinnedConversation_Contact_:
 			serviceId := id.Contact.GetServiceId()
+			if serviceId == "" && len(id.Contact.GetServiceIdBinary()) >= 16 {
+				parsed, err := uuid.FromBytes(id.Contact.GetServiceIdBinary()[:16])
+				if err == nil {
+					serviceId = parsed.String()
+				}
+			}
 			if serviceId != "" {
 				chatId = serviceId
 			}
@@ -1571,6 +1825,17 @@ func (handler *SgEventHandler) handleChatMuteChanged(evt *events.ChatMuteChanged
 		LOG_TRACE(fmt.Sprintf("mute changed %s: %v -> %v", chatId, wasMuted, isMuted))
 		CSgUpdateMuteNotify(connId, chatId, BoolToInt(isMuted))
 	}
+
+	return true
+}
+
+func (handler *SgEventHandler) handleChatArchivedChanged(evt *events.ChatArchivedChanged) bool {
+	LOG_TRACE(fmt.Sprintf("handleChatArchivedChanged %s archived=%v", evt.ChatID, evt.Archived))
+	connId := handler.connId
+	chatId := evt.ChatID
+	isArchived := evt.Archived
+
+	CSgUpdateArchivedNotify(connId, chatId, BoolToInt(isArchived))
 
 	return true
 }
@@ -1846,6 +2111,16 @@ func SgLogin(connId int) int {
 		CSgClearStatus(connId, FlagSyncing)
 	}
 
+	// Sync storage service (contact names, mute/pin/archive state)
+	client.SyncStorage(ctx)
+
+	// Sync backup chats once (first login only)
+	if !GetChatsSynced(connId) {
+		LOG_DEBUG("first sync: sending backup chats")
+		SgGetChats(connId)
+		SetChatsSynced(connId, true)
+	}
+
 	// Request contacts sync
 	client.SyncContactsOnConnect = true
 	client.SendContactSyncRequest(ctx)
@@ -1920,24 +2195,29 @@ func SgGetMessages(connId int, chatId string, limit int, fromMsgId string, owner
 		return -1
 	}
 
-	if client.Store.BackupStore == nil {
+	if client.Store == nil || client.Store.BackupStore == nil {
 		LOG_DEBUG("backup store not available")
 		return -1
 	}
 
 	ctx := context.TODO()
 	device := GetDevice(connId)
-	selfACI := device.ACI
-
-	// Resolve chatId (UUID string) to backup store chat
-	chatUUID := StringToUUID(chatId)
-	if chatUUID == uuid.Nil {
-		LOG_WARNING(fmt.Sprintf("invalid chat UUID: %s", chatId))
+	if device == nil {
+		LOG_WARNING("device is nil")
 		return -1
 	}
+	selfACI := device.ACI
 
-	serviceID := libsignalgo.NewACIServiceID(chatUUID)
-	backupChat, err := client.Store.BackupStore.GetBackupChatByUserID(ctx, serviceID)
+	// Resolve chatId to backup store chat (UUID for 1:1, GroupIdentifier for groups)
+	var backupChat *store.BackupChat
+	var err error
+	chatUUID := StringToUUID(chatId)
+	if chatUUID != uuid.Nil {
+		serviceID := libsignalgo.NewACIServiceID(chatUUID)
+		backupChat, err = client.Store.BackupStore.GetBackupChatByUserID(ctx, serviceID)
+	} else {
+		backupChat, err = client.Store.BackupStore.GetBackupChatByGroupID(ctx, types.GroupIdentifier(chatId))
+	}
 	if err != nil {
 		LOG_WARNING(fmt.Sprintf("get backup chat error: %v", err))
 		return -1
@@ -2063,8 +2343,45 @@ func SgGetMessages(connId int, chatId string, limit int, fromMsgId string, owner
 					}
 				}
 			}
+		case *backuppb.ChatItem_StickerMessage:
+			sticker := msg.StickerMessage.GetSticker()
+			if sticker != nil {
+				if sticker.GetEmoji() != "" {
+					text = sticker.GetEmoji()
+				} else {
+					text = "[Sticker]"
+				}
+				fp := sticker.GetData()
+				if fp != nil {
+					loc := fp.GetLocatorInfo()
+					if loc != nil && loc.GetTransitCdnKey() != "" {
+						ext := ExtensionByType(fp.GetContentType(), ".webp")
+						fileName := fmt.Sprintf("%d%s", item.DateSent, ext)
+						tmpPath := GetPath(connId) + "/tmp"
+						targetPath := fmt.Sprintf("%s/%s", tmpPath, fileName)
+
+						dlInfo := DownloadInfo{
+							Version:       downloadInfoVersion,
+							TargetPath:    targetPath,
+							Key:           loc.GetKey(),
+							Digest:        loc.GetEncryptedDigest(),
+							PlaintextHash: loc.GetPlaintextHash(),
+							Size:          loc.GetSize(),
+							CdnKey:        loc.GetTransitCdnKey(),
+							CdnNumber:     loc.GetTransitCdnNumber(),
+						}
+
+						bytes, jsonErr := json.Marshal(dlInfo)
+						if jsonErr == nil {
+							fileId = string(bytes)
+							filePath = targetPath
+							fileStatus = FileStatusNotDownloaded
+						}
+					}
+				}
+			}
 		default:
-			// Skip non-standard messages (stickers, updates, etc.)
+			// Skip unsupported messages (updates, etc.)
 			if notify == NotifySendCached {
 				// Still need to send the batch even if last item is skipped
 				CSgNewHistoryMessagesNotify(connId, chatId, "", "", "", 0, "", "", "", FileStatusNone, 0, 1, 0, fromMsgId, NotifySendCached)
@@ -2083,8 +2400,8 @@ func SgGetMessages(connId int, chatId string, limit int, fromMsgId string, owner
 	return 0
 }
 
-func SgSendMessage(connId int, chatId string, text string, quotedId string, quotedText string, quotedSender string, filePath string, fileType string, editMsgId string, editMsgSent int) int {
-	LOG_TRACE("send message " + strconv.Itoa(connId) + ", " + chatId + ", " + text + ", " + quotedId + ", " + filePath + ", " + editMsgId)
+func SgSendMessage(connId int, chatId string, text string, quotedId string, quotedText string, quotedSender string, filePath string, fileType string, editMsgId string, editMsgSent int, mentionsJson string) int {
+	LOG_TRACE("send message " + strconv.Itoa(connId) + ", " + chatId + ", " + text + ", " + quotedId + ", " + filePath + ", " + fileType + ", " + editMsgId)
 
 	// sanity check arg
 	if connId == -1 {
@@ -2126,9 +2443,11 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 		}
 
 		plainText, mdBodyRanges := ParseMarkdown(text)
+		plainText, mentionBodyRanges := ProcessMentionsForSend(plainText, mentionsJson)
 		dataMsg.Body = proto.String(plainText)
-		if len(mdBodyRanges) > 0 {
-			dataMsg.BodyRanges = mdBodyRanges
+		allBodyRanges := append(mdBodyRanges, mentionBodyRanges...)
+		if len(allBodyRanges) > 0 {
+			dataMsg.BodyRanges = allBodyRanges
 		}
 
 		editMsg := &signalpb.EditMessage{
@@ -2137,7 +2456,9 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 		}
 
 		content := &signalpb.Content{
-			EditMessage: editMsg,
+			Content: &signalpb.Content_EditMessage{
+				EditMessage: editMsg,
+			},
 		}
 
 		if isGroup {
@@ -2156,17 +2477,23 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 
 		// Echo edited message back to self
 		device := GetDevice(connId)
+		if device == nil {
+			LOG_WARNING("device is nil")
+			return -1
+		}
 		selfId := UUIDToString(device.ACI)
-		timeSent := int(timestamp / 1000)
-		CSgNewMessagesNotify(connId, chatId, strconv.FormatUint(timestamp, 10), selfId, text, 1, quotedId, "", "", 0, timeSent, 1, 1)
-		TrackRecentMessage(connId, chatId, selfId, timestamp)
+		timeSent := int(targetTimestamp / 1000)
+		CSgNewMessagesNotify(connId, chatId, editMsgId, selfId, text, 1, quotedId, "", "", 0, timeSent, 1, 1)
+		TrackRecentMessage(connId, chatId, selfId, targetTimestamp)
 	} else {
 		// Set body
 		if text != "" {
 			plainText, mdBodyRanges := ParseMarkdown(text)
+			plainText, mentionBodyRanges := ProcessMentionsForSend(plainText, mentionsJson)
 			dataMsg.Body = proto.String(plainText)
-			if len(mdBodyRanges) > 0 {
-				dataMsg.BodyRanges = mdBodyRanges
+			allBodyRanges := append(mdBodyRanges, mentionBodyRanges...)
+			if len(allBodyRanges) > 0 {
+				dataMsg.BodyRanges = allBodyRanges
 			}
 		}
 
@@ -2199,7 +2526,35 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 						attachment.ContentType = proto.String(fileType)
 					}
 					attachment.FileName = proto.String(filepath.Base(filePath))
-					dataMsg.Attachments = []*signalpb.AttachmentPointer{attachment}
+
+					sendType := CSgAppConfigGetNum("attachment_send_type")
+					hasText := (text != "")
+					hasQuote := (quotedId != "")
+					isSendAsSpecial := (sendType == AttachmentSendAsSticker) && !hasText && !hasQuote
+
+					mimeParts := strings.Split(fileType, "/")
+					mimeSubType := ""
+					if len(mimeParts) > 1 {
+						mimeSubType = mimeParts[1]
+					}
+					LOG_TRACE(fmt.Sprintf("attachment sendType=%d mimeSubType=%s isSendAsSpecial=%t", sendType, mimeSubType, isSendAsSpecial))
+
+					if isSendAsSpecial && (mimeSubType == "webp") {
+						LOG_TRACE("send sticker " + fileType)
+						attachment.Flags = proto.Uint32(uint32(signalpb.AttachmentPointer_BORDERLESS))
+						dataMsg.Sticker = &signalpb.DataMessage_Sticker{
+							PackId:    make([]byte, 16),
+							PackKey:   make([]byte, 32),
+							StickerId: proto.Uint32(0),
+							Data:      attachment,
+						}
+					} else if isSendAsSpecial && (mimeSubType == "mp4" || mimeSubType == "x-m4v" || mimeSubType == "gif") {
+						LOG_TRACE("send gif " + fileType)
+						attachment.Flags = proto.Uint32(uint32(signalpb.AttachmentPointer_GIF) | uint32(signalpb.AttachmentPointer_BORDERLESS))
+						dataMsg.Attachments = []*signalpb.AttachmentPointer{attachment}
+					} else {
+						dataMsg.Attachments = []*signalpb.AttachmentPointer{attachment}
+					}
 				}
 			} else {
 				LOG_WARNING(fmt.Sprintf("file not found: %s", filePath))
@@ -2207,7 +2562,9 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 		}
 
 		content := &signalpb.Content{
-			DataMessage: dataMsg,
+			Content: &signalpb.Content_DataMessage{
+				DataMessage: dataMsg,
+			},
 		}
 
 		if isGroup {
@@ -2226,6 +2583,10 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 
 		// Echo sent message back to self
 		device := GetDevice(connId)
+		if device == nil {
+			LOG_WARNING("device is nil")
+			return -1
+		}
 		selfId := UUIDToString(device.ACI)
 		timeSent := int(timestamp / 1000)
 		echoFileId := ""
@@ -2235,12 +2596,73 @@ func SgSendMessage(connId int, chatId string, text string, quotedId string, quot
 			echoFileId = AttachmentToFileId(dataMsg.GetAttachments()[0], filePath)
 			echoFilePath = filePath
 			echoFileStatus = FileStatusDownloaded
+		} else if dataMsg.GetSticker() != nil && dataMsg.GetSticker().GetData() != nil {
+			echoFileId = AttachmentToFileId(dataMsg.GetSticker().GetData(), filePath)
+			echoFilePath = filePath
+			echoFileStatus = FileStatusDownloaded
 		}
+		LOG_TRACE(fmt.Sprintf("echo fileId=%s filePath=%s fileStatus=%d", echoFileId, echoFilePath, echoFileStatus))
 		CSgNewMessagesNotify(connId, chatId, strconv.FormatUint(timestamp, 10), selfId, text, 1, quotedId, echoFileId, echoFilePath, echoFileStatus, timeSent, 0, 0)
 		TrackRecentMessage(connId, chatId, selfId, timestamp)
 	}
 
 	LOG_TRACE("send message ok")
+	return 0
+}
+
+func SgGetGroupMembers(connId int, chatId string) int {
+	LOG_TRACE("get group members " + strconv.Itoa(connId) + ", " + chatId)
+
+	client := GetClient(connId)
+	if client == nil {
+		LOG_WARNING("client is nil")
+		return -1
+	}
+
+	ctx := context.TODO()
+
+	// In Signal, groups use GroupIdentifier as chatId
+	recipientUUID := StringToUUID(chatId)
+	if recipientUUID != uuid.Nil {
+		LOG_WARNING("not a group chat")
+		return -1
+	}
+
+	groupID := types.GroupIdentifier(chatId)
+	group, _, err := client.RetrieveGroupByID(ctx, groupID, 0)
+	if err != nil {
+		LOG_WARNING(fmt.Sprintf("retrieve group error: %v", err))
+		return -1
+	}
+
+	if group == nil {
+		LOG_WARNING("group is nil")
+		return -1
+	}
+
+	type MemberInfo struct {
+		Id   string `json:"id"`
+		Name string `json:"name"`
+	}
+	var members []MemberInfo
+	for _, member := range group.Members {
+		memberId := UUIDToString(member.ACI)
+		memberName := ""
+		mx.Lock()
+		if n, ok := contacts[connId][memberId]; ok {
+			memberName = n
+		}
+		mx.Unlock()
+		members = append(members, MemberInfo{Id: memberId, Name: memberName})
+	}
+
+	membersJsonBytes, jsonErr := json.Marshal(members)
+	if jsonErr != nil {
+		LOG_WARNING(fmt.Sprintf("marshal group members err %#v", jsonErr))
+		return -1
+	}
+	CSgNewGroupMembersNotify(connId, chatId, string(membersJsonBytes))
+
 	return 0
 }
 
@@ -2273,10 +2695,14 @@ func SgGetChats(connId int) int {
 	defer CSgClearStatus(connId, FlagFetching)
 
 	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return -1
+	}
 	selfACI := device.ACI
 
 	// Fetch chats from backup store (1:1 and group chats)
-	if client.Store.BackupStore != nil {
+	if client.Store != nil && client.Store.BackupStore != nil {
 		chats, err := client.Store.BackupStore.GetBackupChats(ctx)
 		if err != nil {
 			LOG_WARNING(fmt.Sprintf("get backup chats error: %v", err))
@@ -2294,6 +2720,7 @@ func SgGetChats(connId int) int {
 				}
 
 				var chatId string
+				var chatName string
 				switch dest := recipient.Destination.(type) {
 				case *backuppb.Recipient_Contact:
 					aciBytes := dest.Contact.GetAci()
@@ -2301,6 +2728,18 @@ func SgGetChats(connId int) int {
 						continue
 					}
 					chatId = UUIDToString(uuid.UUID(aciBytes))
+					// Resolve contact name: nickname > profile name > e164
+					if nick := dest.Contact.GetNickname(); nick != nil {
+						chatName = strings.TrimSpace(nick.GetGiven() + " " + nick.GetFamily())
+					}
+					if chatName == "" {
+						given := dest.Contact.GetProfileGivenName()
+						family := dest.Contact.GetProfileFamilyName()
+						chatName = strings.TrimSpace(given + " " + family)
+					}
+					if chatName == "" && dest.Contact.GetE164() != 0 {
+						chatName = fmt.Sprintf("+%d", dest.Contact.GetE164())
+					}
 				case *backuppb.Recipient_Self:
 					chatId = UUIDToString(selfACI)
 				case *backuppb.Recipient_Group:
@@ -2315,6 +2754,19 @@ func SgGetChats(connId int) int {
 						continue
 					}
 					chatId = string(groupID)
+					// Resolve group name from snapshot title
+					if snapshot := dest.Group.GetSnapshot(); snapshot != nil {
+						if titleBlob := snapshot.GetTitle(); titleBlob != nil {
+							chatName = titleBlob.GetTitle()
+						}
+					}
+					// Fallback: fetch group name from server if not in snapshot
+					if chatName == "" {
+						group, _, grpErr := client.RetrieveGroupByID(ctx, groupID, 0)
+						if grpErr == nil && group != nil {
+							chatName = group.Title
+						}
+					}
 				default:
 					continue
 				}
@@ -2323,40 +2775,38 @@ func SgGetChats(connId int) int {
 					continue
 				}
 
+				// Set name from backup data if not already known
+				if chatName != "" && !HasContact(connId, chatId) {
+					AddContactName(connId, chatId, chatName)
+					CSgNewContactsNotify(connId, chatId, chatName, "", BoolToInt(false), BoolToInt(false), NotifyDirect)
+				}
+
+				lastMessageTime := int(chat.LatestMessageID / 1000)
+				if lastMessageTime == 0 {
+					LOG_TRACE(fmt.Sprintf("Chat %s: skip (no timestamp)", chatId))
+					continue
+				}
+
+				messageCount := chat.TotalMessages
+				if messageCount == 0 {
+					LOG_TRACE(fmt.Sprintf("Chat %s: skip (no messages)", chatId))
+					continue
+				}
+
 				isUnread := BoolToInt(chat.GetMarkedUnread())
 				isMuted := 0
 				if chat.GetMuteUntilMs() > 0 {
 					isMuted = 1
 				}
+
 				isPinned := 0
 				if chat.GetPinnedOrder() > 0 {
 					isPinned = 1
 				}
-				lastMessageTime := int(chat.LatestMessageID / 1000)
 
-				LOG_TRACE(fmt.Sprintf("Chat %s: unread=%d muted=%d pinned=%d time=%d", chatId, isUnread, isMuted, isPinned, lastMessageTime))
-				CSgNewChatsNotify(connId, chatId, isUnread, isMuted, isPinned, lastMessageTime)
-			}
-		}
-	}
-
-	// Fetch group names from server for all known groups
-	groupIDs, err := client.Store.GroupStore.AllGroupIdentifiers(ctx)
-	if err != nil {
-		LOG_WARNING(fmt.Sprintf("get all group identifiers error: %v", err))
-	} else {
-		LOG_DEBUG(fmt.Sprintf("got %d groups", len(groupIDs)))
-		for _, gid := range groupIDs {
-			group, _, err := client.RetrieveGroupByID(ctx, gid, 0)
-			if err != nil {
-				LOG_WARNING(fmt.Sprintf("retrieve group %s error: %v", gid, err))
-				continue
-			}
-			if group != nil && group.Title != "" {
-				chatId := string(gid)
-				LOG_TRACE(fmt.Sprintf("Group %s: %s", chatId, group.Title))
-				CSgNewContactsNotify(connId, chatId, group.Title, "", BoolToInt(false), BoolToInt(false), NotifyDirect)
-				AddContactName(connId, chatId, group.Title)
+				isArchived := BoolToInt(chat.GetArchived())
+				LOG_TRACE(fmt.Sprintf("Chat %s: name=%q unread=%d muted=%d pinned=%d archived=%d time=%d", chatId, chatName, isUnread, isMuted, isPinned, isArchived, lastMessageTime))
+				CSgNewChatsNotify(connId, chatId, isUnread, isMuted, isPinned, isArchived, lastMessageTime)
 			}
 		}
 	}
@@ -2398,7 +2848,9 @@ func SgMarkMessageRead(connId int, chatId string, senderId string, msgId string)
 	}
 
 	content := &signalpb.Content{
-		ReceiptMessage: receipt,
+		Content: &signalpb.Content_ReceiptMessage{
+			ReceiptMessage: receipt,
+		},
 	}
 
 	result := client.SendMessage(ctx, senderServiceID, content)
@@ -2456,6 +2908,10 @@ func SgDeleteMessage(connId int, chatId string, senderId string, msgId string) i
 
 	ctx := context.TODO()
 	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return -1
+	}
 	selfACI := device.ACI
 	selfServiceID := libsignalgo.NewACIServiceID(selfACI)
 
@@ -2465,10 +2921,12 @@ func SgDeleteMessage(connId int, chatId string, senderId string, msgId string) i
 	if senderId == UUIDToString(selfACI) && ageMs <= 24*60*60*1000 {
 		LOG_TRACE("delete for everyone: own message")
 		deleteContent := &signalpb.Content{
-			DataMessage: &signalpb.DataMessage{
-				Timestamp: proto.Uint64(uint64(time.Now().UnixMilli())),
-				Delete: &signalpb.DataMessage_Delete{
-					TargetSentTimestamp: proto.Uint64(timestamp),
+			Content: &signalpb.Content_DataMessage{
+				DataMessage: &signalpb.DataMessage{
+					Timestamp: proto.Uint64(uint64(time.Now().UnixMilli())),
+					Delete: &signalpb.DataMessage_Delete{
+						TargetSentTimestamp: proto.Uint64(timestamp),
+					},
 				},
 			},
 		}
@@ -2492,17 +2950,21 @@ func SgDeleteMessage(connId int, chatId string, senderId string, msgId string) i
 
 	// Also send "delete for me" sync to own devices
 	syncContent := &signalpb.Content{
-		SyncMessage: &signalpb.SyncMessage{
-			DeleteForMe: &signalpb.SyncMessage_DeleteForMe{
-				MessageDeletes: []*signalpb.SyncMessage_DeleteForMe_MessageDeletes{
-					{
-						Conversation: conv,
-						Messages: []*signalpb.AddressableMessage{
+		Content: &signalpb.Content_SyncMessage{
+			SyncMessage: &signalpb.SyncMessage{
+				Content: &signalpb.SyncMessage_DeleteForMe_{
+					DeleteForMe: &signalpb.SyncMessage_DeleteForMe{
+						MessageDeletes: []*signalpb.SyncMessage_DeleteForMe_MessageDeletes{
 							{
-								Author: &signalpb.AddressableMessage_AuthorServiceId{
-									AuthorServiceId: senderId,
+								Conversation: conv,
+								Messages: []*signalpb.AddressableMessage{
+									{
+										Author: &signalpb.AddressableMessage_AuthorServiceId{
+											AuthorServiceId: senderId,
+										},
+										SentTimestamp: proto.Uint64(timestamp),
+									},
 								},
-								SentTimestamp: proto.Uint64(timestamp),
 							},
 						},
 					},
@@ -2515,6 +2977,23 @@ func SgDeleteMessage(connId int, chatId string, senderId string, msgId string) i
 	if !result.WasSuccessful {
 		LOG_WARNING("send delete message sync failed")
 		return -1
+	}
+
+	// Delete from local backup store so the message doesn't reappear on restart
+	if client.Store.BackupStore != nil {
+		var backupChat *store.BackupChat
+		chatUUID := StringToUUID(chatId)
+		if chatUUID != uuid.Nil {
+			backupChat, _ = client.Store.BackupStore.GetBackupChatByUserID(ctx, libsignalgo.NewACIServiceID(chatUUID))
+		} else {
+			backupChat, _ = client.Store.BackupStore.GetBackupChatByGroupID(ctx, types.GroupIdentifier(chatId))
+		}
+		if backupChat != nil {
+			err := client.Store.BackupStore.DeleteBackupChatItem(ctx, backupChat.Id, timestamp)
+			if err != nil {
+				LOG_WARNING(fmt.Sprintf("delete backup chat item failed: %v", err))
+			}
+		}
 	}
 
 	return 0
@@ -2536,12 +3015,16 @@ func SgDeleteChat(connId int, chatId string) int {
 
 	ctx := context.TODO()
 	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return -1
+	}
 	selfACI := device.ACI
 
 	// Fetch up to 5 most recent messages as anchor points for the receiving device
 	var mostRecentMessages []*signalpb.AddressableMessage
 	var backupChat *store.BackupChat
-	if client.Store.BackupStore != nil {
+	if client.Store != nil && client.Store.BackupStore != nil {
 		chatUUID := StringToUUID(chatId)
 		if chatUUID != uuid.Nil {
 			backupChat, _ = client.Store.BackupStore.GetBackupChatByUserID(ctx, libsignalgo.NewACIServiceID(chatUUID))
@@ -2602,13 +3085,17 @@ func SgDeleteChat(connId int, chatId string) int {
 	LOG_TRACE(fmt.Sprintf("delete chat %s with %d anchor messages", chatId, len(mostRecentMessages)))
 
 	content := &signalpb.Content{
-		SyncMessage: &signalpb.SyncMessage{
-			DeleteForMe: &signalpb.SyncMessage_DeleteForMe{
-				ConversationDeletes: []*signalpb.SyncMessage_DeleteForMe_ConversationDelete{
-					{
-						Conversation:       conv,
-						MostRecentMessages: mostRecentMessages,
-						IsFullDelete:       proto.Bool(true),
+		Content: &signalpb.Content_SyncMessage{
+			SyncMessage: &signalpb.SyncMessage{
+				Content: &signalpb.SyncMessage_DeleteForMe_{
+					DeleteForMe: &signalpb.SyncMessage_DeleteForMe{
+						ConversationDeletes: []*signalpb.SyncMessage_DeleteForMe_ConversationDelete{
+							{
+								Conversation:       conv,
+								MostRecentMessages: mostRecentMessages,
+								IsFullDelete:       proto.Bool(true),
+							},
+						},
 					},
 				},
 			},
@@ -2623,7 +3110,7 @@ func SgDeleteChat(connId int, chatId string) int {
 	}
 
 	// Delete chat and its messages from local BackupStore
-	if client.Store.BackupStore != nil && backupChat != nil {
+	if client.Store != nil && client.Store.BackupStore != nil && backupChat != nil {
 		err := client.Store.BackupStore.DeleteBackupChatItems(ctx, backupChat.Id, time.Time{})
 		if err != nil {
 			LOG_WARNING(fmt.Sprintf("delete backup chat items failed: %v", err))
@@ -2637,6 +3124,50 @@ func SgDeleteChat(connId int, chatId string) int {
 	return 0
 }
 
+func SgArchiveChat(connId int, chatId string, isArchived int) int {
+	LOG_TRACE("archive chat " + strconv.Itoa(connId) + ", " + chatId + ", " + strconv.Itoa(isArchived))
+
+	client := GetClient(connId)
+	if client == nil {
+		LOG_WARNING("client is nil")
+		return -1
+	}
+
+	archived := isArchived != 0
+
+	// Notify UI
+	CSgUpdateArchivedNotify(connId, chatId, isArchived)
+
+	// @todo: notify service about archived chat
+
+	LOG_TRACE(fmt.Sprintf("archive chat ok %s %t", chatId, archived))
+	return 0
+}
+
+func SgPinChat(connId int, chatId string, isPinned int) int {
+	LOG_TRACE("pin chat " + strconv.Itoa(connId) + ", " + chatId + ", " + strconv.Itoa(isPinned))
+
+	client := GetClient(connId)
+	if client == nil {
+		LOG_WARNING("client is nil")
+		return -1
+	}
+
+	pinned := isPinned != 0
+
+	// @todo: notify service about pinned chat
+
+	// Notify UI
+	order := 0
+	if pinned {
+		order = 1
+	}
+	CSgUpdatePinNotify(connId, chatId, isPinned, order)
+
+	LOG_TRACE(fmt.Sprintf("pin chat ok %s %t", chatId, pinned))
+	return 0
+}
+
 func SgSendTyping(connId int, chatId string, isTyping int) int {
 	LOG_TRACE("send typing " + strconv.Itoa(connId) + ", " + chatId + ", " + strconv.Itoa(isTyping))
 
@@ -2644,6 +3175,16 @@ func SgSendTyping(connId int, chatId string, isTyping int) int {
 	if client == nil {
 		LOG_WARNING("client is nil")
 		return -1
+	}
+
+	// Skip typing indicator for self-chat (Note to Self / Saved Messages)
+	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return -1
+	}
+	if chatId == UUIDToString(device.ACI) {
+		return 0
 	}
 
 	ctx := context.TODO()
@@ -2660,7 +3201,9 @@ func SgSendTyping(connId int, chatId string, isTyping int) int {
 	}
 
 	content := &signalpb.Content{
-		TypingMessage: typingMsg,
+		Content: &signalpb.Content_TypingMessage{
+			TypingMessage: typingMsg,
+		},
 	}
 
 	// Determine if DM or group
@@ -2741,7 +3284,9 @@ func SgSendReaction(connId int, chatId string, senderId string, msgId string, em
 	}
 
 	content := &signalpb.Content{
-		DataMessage: dataMsg,
+		Content: &signalpb.Content_DataMessage{
+			DataMessage: dataMsg,
+		},
 	}
 
 	// Determine if DM or group
@@ -2766,6 +3311,10 @@ func SgSendReaction(connId int, chatId string, senderId string, msgId string, em
 
 	// Echo reaction back to self
 	device := GetDevice(connId)
+	if device == nil {
+		LOG_WARNING("device is nil")
+		return -1
+	}
 	selfId := UUIDToString(device.ACI)
 	CSgNewMessageReactionNotify(connId, chatId, msgId, selfId, emoji, 1)
 

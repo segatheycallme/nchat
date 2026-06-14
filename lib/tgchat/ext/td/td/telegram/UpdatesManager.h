@@ -121,6 +121,8 @@ class UpdatesManager final : public Actor {
 
   static string extract_join_group_call_presentation_params(telegram_api::Updates *updates_ptr);
 
+  static bool extract_star_gift_craft_fail(telegram_api::Updates *updates_ptr);
+
   static vector<telegram_api::object_ptr<telegram_api::updateGroupCallMessage>> extract_group_call_messages(
       telegram_api::Updates *updates_ptr);
 
@@ -553,6 +555,7 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateChatParticipantAdd> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateChatParticipantAdmin> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateChatParticipantDelete> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updateChatParticipantRank> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateChatDefaultBannedRights> update, Promise<Unit> &&promise);
 
@@ -653,6 +656,8 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateDeleteGroupCallMessages> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateStarGiftCraftFail> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateStarGiftAuctionState> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateStarGiftAuctionUserState> update, Promise<Unit> &&promise);
@@ -675,14 +680,25 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateSentPhoneCode> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateManagedBot> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotStopped> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateChatParticipant> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateChannelParticipant> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotChatInviteRequester> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotChatBoost> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotMessageReaction> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotMessageReactions> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotPurchasedPaidMedia> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateBotGuestChatQuery> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateTheme> update, Promise<Unit> &&promise);
 
@@ -731,6 +747,8 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateStarsBalance> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateStarsRevenueStatus> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateAiComposeTones> update, Promise<Unit> &&promise);
 
   // unsupported updates
 
