@@ -28,7 +28,7 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/signalpb"
 )
 
 type UserInfo struct {
@@ -86,6 +86,9 @@ func Parse(ctx context.Context, message string, ranges []*signalpb.BodyRange, pa
 			Start:  int(*r.Start),
 			Length: int(*r.Length),
 		}.TruncateEnd(maxLength)
+		if br.Start >= maxLength {
+			continue
+		}
 		var mentionACI uuid.UUID
 		switch rv := r.GetAssociatedValue().(type) {
 		case *signalpb.BodyRange_Style_:

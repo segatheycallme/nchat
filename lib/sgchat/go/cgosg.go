@@ -17,7 +17,7 @@ package main
 // extern void SgNewStatusNotify(int p_ConnId, char* p_UserId, int p_IsOnline, int p_TimeSeen);
 // extern void SgNewTypingNotify(int p_ConnId, char* p_ChatId, char* p_UserId, int p_IsTyping);
 // extern void SgNewMessageStatusNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsRead);
-// extern void SgNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FilePath, int p_FileStatus, int p_Action);
+// extern void SgNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FileId, char* p_FilePath, int p_FileStatus, int p_Action);
 // extern void SgNewMessageReactionNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text, int p_FromMe);
 // extern void SgDeleteChatNotify(int p_ConnId, char* p_ChatId);
 // extern void SgDeleteMessageNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsOutgoing);
@@ -30,6 +30,7 @@ package main
 // extern void SgClearStatus(int p_ConnId, int p_Flags);
 // extern int SgAppConfigGetNum(char* p_Param);
 // extern void SgAppConfigSetNum(char* p_Param, int p_Value);
+// extern int SgHasGui();
 // extern void SgLogTrace(char* p_Filename, int p_LineNo, char* p_Message);
 // extern void SgLogDebug(char* p_Filename, int p_LineNo, char* p_Message);
 // extern void SgLogInfo(char* p_Filename, int p_LineNo, char* p_Message);
@@ -164,8 +165,8 @@ func CSgNewMessageStatusNotify(connId int, chatId string, msgId string, isRead i
 	C.SgNewMessageStatusNotify(C.int(connId), C.CString(chatId), C.CString(msgId), C.int(isRead))
 }
 
-func CSgNewMessageFileNotify(connId int, chatId string, msgId string, filePath string, fileStatus int, action int) {
-	C.SgNewMessageFileNotify(C.int(connId), C.CString(chatId), C.CString(msgId), C.CString(filePath), C.int(fileStatus), C.int(action))
+func CSgNewMessageFileNotify(connId int, chatId string, msgId string, fileId string, filePath string, fileStatus int, action int) {
+	C.SgNewMessageFileNotify(C.int(connId), C.CString(chatId), C.CString(msgId), C.CString(fileId), C.CString(filePath), C.int(fileStatus), C.int(action))
 }
 
 func CSgNewMessageReactionNotify(connId int, chatId string, msgId string, senderId string, text string, fromMe int) {
@@ -214,6 +215,10 @@ func CSgAppConfigGetNum(param string) int {
 
 func CSgAppConfigSetNum(param string, value int) {
 	C.SgAppConfigSetNum(C.CString(param), C.int(value))
+}
+
+func CSgHasGui() int {
+	return int(C.SgHasGui())
 }
 
 func LOG_TRACE(message string) {

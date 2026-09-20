@@ -42,6 +42,7 @@ class BusinessConnectionManager;
 class BusinessManager;
 class CallManager;
 class ChatManager;
+class CommunityManager;
 class ConfigManager;
 class ConnectionCreator;
 class DialogActionManager;
@@ -50,6 +51,7 @@ class DialogInviteLinkManager;
 class DialogManager;
 class DialogParticipantManager;
 class DownloadManager;
+class DraftMessageManager;
 class FileManager;
 class FileReferenceManager;
 class ForumTopicManager;
@@ -69,6 +71,7 @@ class OnlineManager;
 class OptionManager;
 class PasswordManager;
 class PeopleNearbyManager;
+class PollManager;
 class PromoDataManager;
 class QuickReplyManager;
 class ReactionManager;
@@ -93,7 +96,9 @@ class TranslationManager;
 class UpdatesManager;
 class UserManager;
 class WebAppManager;
+class WebBrowserManager;
 class WebPagesManager;
+class WelcomeMessageManager;
 
 class Global final : public ActorContext {
  public:
@@ -284,6 +289,13 @@ class Global final : public ActorContext {
     chat_manager_ = chat_manager;
   }
 
+  ActorId<CommunityManager> community_manager() const {
+    return community_manager_;
+  }
+  void set_community_manager(ActorId<CommunityManager> community_manager) {
+    community_manager_ = community_manager;
+  }
+
   ActorId<ConfigManager> config_manager() const {
     return config_manager_;
   }
@@ -331,6 +343,13 @@ class Global final : public ActorContext {
   }
   void set_download_manager(ActorId<DownloadManager> download_manager) {
     download_manager_ = std::move(download_manager);
+  }
+
+  ActorId<DraftMessageManager> draft_message_manager() const {
+    return draft_message_manager_;
+  }
+  void set_draft_message_manager(ActorId<DraftMessageManager> draft_message_manager) {
+    draft_message_manager_ = std::move(draft_message_manager);
   }
 
   ActorId<FileManager> file_manager() const {
@@ -448,6 +467,13 @@ class Global final : public ActorContext {
   }
   void set_people_nearby_manager(ActorId<PeopleNearbyManager> people_nearby_manager) {
     people_nearby_manager_ = people_nearby_manager;
+  }
+
+  ActorId<PollManager> poll_manager() const {
+    return poll_manager_;
+  }
+  void set_poll_manager(ActorId<PollManager> poll_manager) {
+    poll_manager_ = poll_manager;
   }
 
   ActorId<PromoDataManager> promo_data_manager() const {
@@ -590,11 +616,25 @@ class Global final : public ActorContext {
     web_app_manager_ = web_app_manager;
   }
 
+  ActorId<WebBrowserManager> web_browser_manager() const {
+    return web_browser_manager_;
+  }
+  void set_web_browser_manager(ActorId<WebBrowserManager> web_browser_manager) {
+    web_browser_manager_ = web_browser_manager;
+  }
+
   ActorId<WebPagesManager> web_pages_manager() const {
     return web_pages_manager_;
   }
   void set_web_pages_manager(ActorId<WebPagesManager> web_pages_manager) {
     web_pages_manager_ = web_pages_manager;
+  }
+
+  ActorId<WelcomeMessageManager> welcome_message_manager() const {
+    return welcome_message_manager_;
+  }
+  void set_welcome_message_manager(ActorId<WelcomeMessageManager> welcome_message_manager) {
+    welcome_message_manager_ = welcome_message_manager;
   }
 
   ActorId<ConnectionCreator> connection_creator() const;
@@ -738,6 +778,7 @@ class Global final : public ActorContext {
   ActorId<BusinessManager> business_manager_;
   ActorId<CallManager> call_manager_;
   ActorId<ChatManager> chat_manager_;
+  ActorId<CommunityManager> community_manager_;
   ActorId<ConfigManager> config_manager_;
   ActorId<DialogActionManager> dialog_action_manager_;
   ActorId<DialogFilterManager> dialog_filter_manager_;
@@ -745,6 +786,7 @@ class Global final : public ActorContext {
   ActorId<DialogManager> dialog_manager_;
   ActorId<DialogParticipantManager> dialog_participant_manager_;
   ActorId<DownloadManager> download_manager_;
+  ActorId<DraftMessageManager> draft_message_manager_;
   ActorId<FileManager> file_manager_;
   ActorId<FileReferenceManager> file_reference_manager_;
   ActorId<ForumTopicManager> forum_topic_manager_;
@@ -761,6 +803,7 @@ class Global final : public ActorContext {
   ActorId<OnlineManager> online_manager_;
   ActorId<PasswordManager> password_manager_;
   ActorId<PeopleNearbyManager> people_nearby_manager_;
+  ActorId<PollManager> poll_manager_;
   ActorId<PromoDataManager> promo_data_manager_;
   ActorId<QuickReplyManager> quick_reply_manager_;
   ActorId<ReactionManager> reaction_manager_;
@@ -781,7 +824,9 @@ class Global final : public ActorContext {
   ActorId<UpdatesManager> updates_manager_;
   ActorId<UserManager> user_manager_;
   ActorId<WebAppManager> web_app_manager_;
+  ActorId<WebBrowserManager> web_browser_manager_;
   ActorId<WebPagesManager> web_pages_manager_;
+  ActorId<WelcomeMessageManager> welcome_message_manager_;
   ActorOwn<ConnectionCreator> connection_creator_;
   ActorOwn<TempAuthKeyWatchdog> temp_auth_key_watchdog_;
 

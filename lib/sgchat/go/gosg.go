@@ -13,7 +13,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime"
 	"os"
 	"os/exec"
@@ -38,13 +37,13 @@ import (
 	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/events"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/backuppb"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/signalpb"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
 )
 
-var signalDate int = 20260519
+var signalDate int = 20260918
 
 type State int64
 
@@ -434,87 +433,8 @@ func GetDeviceName() string {
 	return "nchat (" + GetOSName() + ")"
 }
 
-func GetConfigOrEnvFlag(envVarName string) bool {
-	configParamName := strings.ToLower(envVarName)
-	isConfigSet := CSgAppConfigGetNum(configParamName)
-	if IntToBool(isConfigSet) {
-		return true
-	}
-
-	_, isEnvSet := os.LookupEnv(envVarName)
-	if isEnvSet {
-		CSgAppConfigSetNum(configParamName, 1)
-		return true
-	}
-
-	return false
-}
-
 func HasGUI() bool {
-	useQrTerminal := GetConfigOrEnvFlag("USE_QR_TERMINAL")
-	if useQrTerminal {
-		return false
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		LOG_INFO(fmt.Sprintf("has gui"))
-		LOG_DEBUG(fmt.Sprintf("gui check: [darwin default true]"))
-		return true
-
-	case "linux":
-		_, isDisplaySet := os.LookupEnv("DISPLAY")
-		file, err := os.CreateTemp("/tmp", "nchat-x11check.*.sh")
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("create file failed %#v", err))
-			return isDisplaySet
-		}
-
-		defer os.Remove(file.Name())
-		content := "#!/usr/bin/env bash\n\n" +
-			"if command -v timeout &> /dev/null; then\n" +
-			"  CMD=\"timeout 1s xset q\"\n" +
-			"else\n" +
-			"  CMD=\"xset q\"\n" +
-			"fi\n" +
-			"echo \"${CMD}\"\n" +
-			"${CMD} > /dev/null\n" +
-			"exit ${?}\n"
-
-		_, err = io.WriteString(file, content)
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("write file failed %#v", err))
-			return isDisplaySet
-		}
-
-		err = file.Close()
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("close file failed %#v", err))
-			return isDisplaySet
-		}
-
-		err = os.Chmod(file.Name(), 0777)
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("chmod file failed %#v", err))
-			return isDisplaySet
-		}
-
-		cmdout, err := exec.Command(file.Name()).CombinedOutput()
-		if err == nil {
-			LOG_INFO(fmt.Sprintf("has gui"))
-			LOG_DEBUG(fmt.Sprintf("gui check: %s", strings.TrimSuffix(string(cmdout), "\n")))
-			return true
-		} else {
-			LOG_INFO(fmt.Sprintf("no gui"))
-			LOG_DEBUG(fmt.Sprintf("gui check: %s", strings.TrimSuffix(string(cmdout), "\n")))
-			return false
-		}
-
-	default:
-		LOG_INFO(fmt.Sprintf("no gui"))
-		LOG_DEBUG(fmt.Sprintf("gui check: [other \"%s\" default false]", runtime.GOOS))
-		return false
-	}
+	return IntToBool(CSgHasGui())
 }
 
 func BoolToInt(b bool) int {
@@ -738,6 +658,69 @@ func ProcessBackupFormattedText(connId int, text string, bodyRanges []*backuppb.
 	}
 
 	return text
+}
+
+// ContactCard holds the contact details displayed for a shared contact.
+type ContactCard struct {
+	Name   string
+	Phones []string
+	Emails []string
+}
+
+// FormatContactCards formats one or more contact cards as a "[Contact]" tag on its own line,
+// followed by "Field: value" lines per contact, with contacts separated by a blank line.
+func FormatContactCards(cards []ContactCard) string {
+	var blocks []string
+	for _, card := range cards {
+		var lines []string
+		if card.Name != "" {
+			lines = append(lines, "Name: "+card.Name)
+		}
+		if len(card.Phones) > 0 {
+			lines = append(lines, "Phone: "+strings.Join(card.Phones, ", "))
+		}
+		if len(card.Emails) > 0 {
+			lines = append(lines, "Email: "+strings.Join(card.Emails, ", "))
+		}
+
+		if len(lines) > 0 {
+			blocks = append(blocks, strings.Join(lines, "\n"))
+		}
+	}
+
+	if len(blocks) == 0 {
+		return "[Contact]"
+	}
+
+	return "[Contact]\n" + strings.Join(blocks, "\n\n")
+}
+
+func GetContactCards(contacts []*signalpb.DataMessage_Contact) []ContactCard {
+	var cards []ContactCard
+	for _, contact := range contacts {
+		name := strings.TrimSpace(contact.GetName().GetGivenName() + " " + contact.GetName().GetFamilyName())
+		if name == "" {
+			name = strings.TrimSpace(contact.GetName().GetNickname())
+		}
+
+		var phones []string
+		for _, phone := range contact.GetNumber() {
+			if value := strings.TrimSpace(phone.GetValue()); value != "" {
+				phones = append(phones, value)
+			}
+		}
+
+		var emails []string
+		for _, email := range contact.GetEmail() {
+			if value := strings.TrimSpace(email.GetValue()); value != "" {
+				emails = append(emails, value)
+			}
+		}
+
+		cards = append(cards, ContactCard{Name: name, Phones: phones, Emails: emails})
+	}
+
+	return cards
 }
 
 func ParseMarkdown(text string) (string, []*signalpb.BodyRange) {
@@ -1243,7 +1226,7 @@ func (handler *SgEventHandler) handleDataMessage(chatId string, senderId string,
 			placeholder = "[Sticker]"
 		}
 	} else if len(msg.GetContact()) > 0 {
-		placeholder = "[Contact]"
+		placeholder = FormatContactCards(GetContactCards(msg.GetContact()))
 	} else if msg.GetPayment() != nil {
 		placeholder = "[Payment]"
 	} else if msg.GetGiftBadge() != nil {
@@ -1260,8 +1243,6 @@ func (handler *SgEventHandler) handleDataMessage(chatId string, senderId string,
 		placeholder = "[PollTerminate]"
 	} else if msg.GetFlags()&uint32(signalpb.DataMessage_EXPIRATION_TIMER_UPDATE) != 0 {
 		placeholder = "[ExpirationTimerUpdate]"
-	} else if msg.GetFlags()&uint32(signalpb.DataMessage_END_SESSION) != 0 {
-		placeholder = "[EndSession]"
 	} else if msg.GetFlags()&uint32(signalpb.DataMessage_PROFILE_KEY_UPDATE) != 0 {
 		return // silent, no need to display
 	}
@@ -2056,6 +2037,8 @@ func SgLogin(connId int) int {
 				}
 				CSgClearStatus(connId, FlagConnecting)
 				SetState(connId, Disconnected)
+				LOG_TRACE(fmt.Sprintf("Call CSgReinit"))
+				CSgReinit(connId)
 				return -1
 			} else if status.Event == signalmeow.SignalConnectionEventError ||
 				status.Event == signalmeow.SignalConnectionEventFatalError {
@@ -2140,13 +2123,15 @@ func monitorConnectionStatus(connId int, statusChan chan signalmeow.SignalConnec
 			LOG_DEBUG("websocket reconnected")
 			CSgSetStatus(connId, FlagOnline)
 		case signalmeow.SignalConnectionEventLoggedOut:
-			LOG_WARNING("logged out while connected")
+			LOG_WARNING("logged out while connected, reinit")
 			CSgClearStatus(connId, FlagOnline)
 			ctx := context.TODO()
 			client := GetClient(connId)
 			if client != nil {
 				client.ClearKeysAndDisconnect(ctx)
 			}
+			LOG_TRACE(fmt.Sprintf("Call CSgReinit"))
+			CSgReinit(connId)
 			return
 		case signalmeow.SignalConnectionEventFatalError:
 			LOG_WARNING(fmt.Sprintf("fatal connection error: %v", status.Err))
@@ -3234,8 +3219,10 @@ func SgDownloadFile(connId int, chatId string, msgId string, fileId string, acti
 
 	filePath, fileStatus := DownloadFromFileId(connId, fileId)
 
+	// notify result (pass fileId back so the attachment stays re-downloadable if its file is
+	// later removed, ex: when the profile tmp dir is cleared between sessions)
 	LOG_TRACE(fmt.Sprintf("Call CSgNewMessageFileNotify"))
-	CSgNewMessageFileNotify(connId, chatId, msgId, filePath, fileStatus, action)
+	CSgNewMessageFileNotify(connId, chatId, msgId, fileId, filePath, fileStatus, action)
 
 	return 0
 }

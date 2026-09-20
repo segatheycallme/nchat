@@ -7,6 +7,8 @@
 #pragma once
 
 #include "td/telegram/DialogId.h"
+#include "td/telegram/DraftMessageManager.h"
+#include "td/telegram/files/FileId.h"
 #include "td/telegram/InputDialogId.h"
 #include "td/telegram/InputMessageText.h"
 #include "td/telegram/logevent/LogEvent.h"
@@ -19,12 +21,12 @@
 #include "td/telegram/telegram_api.h"
 
 #include "td/utils/common.h"
-#include "td/utils/Promise.h"
 #include "td/utils/Status.h"
 
 namespace td {
 
 class Dependencies;
+class MessageContent;
 class SuggestedPost;
 class Td;
 
@@ -40,7 +42,7 @@ class DraftMessageContent {
 
   virtual DraftMessageContentType get_type() const = 0;
 
-  virtual td_api::object_ptr<td_api::InputMessageContent> get_draft_input_message_content_object() const = 0;
+  virtual td_api::object_ptr<td_api::DraftMessageContent> get_draft_message_content_object() const = 0;
 
   virtual ~DraftMessageContent() = default;
 };
@@ -49,10 +51,12 @@ class DraftMessage {
   int32 date_ = 0;
   MessageInputReplyTo message_input_reply_to_;
   InputMessageText input_message_text_;
+  unique_ptr<MessageContent> rich_message_content_;  // must be MessageRichText
   unique_ptr<DraftMessageContent> local_content_;
   MessageEffectId message_effect_id_;
   unique_ptr<SuggestedPost> suggested_post_;
 
+  friend class DraftMessageManager::UploadDraftMessageCallback;
   friend class SaveDraftMessageQuery;
 
  public:
@@ -72,11 +76,17 @@ class DraftMessage {
     return local_content_ != nullptr;
   }
 
+  const MessageContent *get_rich_message_content() const {
+    return rich_message_content_.get();
+  }
+
   bool need_clear_local(MessageContentType content_type) const;
 
   bool need_update_to(const DraftMessage &other, bool from_update) const;
 
-  static unique_ptr<DraftMessage> clone(const unique_ptr<DraftMessage> &draft_message);
+  static unique_ptr<DraftMessage> clone(Td *td, const unique_ptr<DraftMessage> &draft_message, DialogId dialog_id);
+
+  vector<FileId> get_file_ids(const Td *td) const;
 
   void add_dependencies(Dependencies &dependencies) const;
 
@@ -104,6 +114,8 @@ bool is_local_draft_message(const unique_ptr<DraftMessage> &draft_message);
 bool need_update_draft_message(const unique_ptr<DraftMessage> &old_draft_message,
                                const unique_ptr<DraftMessage> &new_draft_message, bool from_update);
 
+vector<FileId> get_draft_message_file_ids(const Td *td, const unique_ptr<DraftMessage> &draft_message);
+
 void add_draft_message_dependencies(Dependencies &dependencies, const unique_ptr<DraftMessage> &draft_message);
 
 td_api::object_ptr<td_api::draftMessage> get_draft_message_object(Td *td,
@@ -111,13 +123,6 @@ td_api::object_ptr<td_api::draftMessage> get_draft_message_object(Td *td,
 
 unique_ptr<DraftMessage> get_draft_message(Td *td,
                                            telegram_api::object_ptr<telegram_api::DraftMessage> &&draft_message_ptr);
-
-void save_draft_message(Td *td, DialogId dialog_id, const MessageTopic &message_topic,
-                        const unique_ptr<DraftMessage> &draft_message, Promise<Unit> &&promise);
-
-void load_all_draft_messages(Td *td);
-
-void clear_all_draft_messages(Td *td, Promise<Unit> &&promise);
 
 vector<InputDialogId> get_draft_message_reply_input_dialog_ids(
     const telegram_api::object_ptr<telegram_api::DraftMessage> &draft_message);

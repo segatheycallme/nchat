@@ -17,6 +17,7 @@
 #include "td/utils/FlatHashSet.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
+#include "td/utils/port/config.h"
 #include "td/utils/port/detail/PollableFd.h"
 #include "td/utils/port/detail/skip_eintr.h"
 #include "td/utils/port/PollFlags.h"
@@ -120,7 +121,7 @@ Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
     return Status::Error(PSLICE() << "File \"" << filepath << "\" has failed to be " << PrintFlags{flags});
   }
 
-  if ((flags & (Write | Read)) == 0) {
+  if ((flags & (Write | Read)) == 0 && !(flags & WinStat)) {
     return Status::Error(PSLICE() << "File \"" << filepath << "\" can't be " << PrintFlags{flags});
   }
 
@@ -188,8 +189,7 @@ Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
     desired_access |= GENERIC_READ | GENERIC_WRITE;
   } else if (flags & Write) {
     desired_access |= GENERIC_WRITE;
-  } else {
-    CHECK(flags & Read);
+  } else if (flags & Read) {
     desired_access |= GENERIC_READ;
   }
 

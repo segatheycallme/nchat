@@ -415,7 +415,11 @@ Result<uint64> Transport::read_auth_key_id(Slice message) {
   return as<uint64>(message.begin());
 }
 
-Result<Transport::ReadResult> Transport::read(MutableSlice message, const AuthKey &auth_key, PacketInfo *packet_info) {
+Result<Transport::ReadResult> Transport::read(MutableSlice message, int32 error_code, const AuthKey &auth_key,
+                                              PacketInfo *packet_info) {
+  if (error_code >= 300) {
+    return ReadResult::make_error(-error_code);
+  }
   if (message.size() < 16) {
     if (message.size() < 4) {
       return Status::Error(PSLICE() << "Invalid MTProto message: smaller than 4 bytes [size = " << message.size()
@@ -435,6 +439,7 @@ Result<Transport::ReadResult> Transport::read(MutableSlice message, const AuthKe
   packet_info->no_crypto_flag = as<int64>(message.begin()) == 0;
   MutableSlice data;
   if (packet_info->type == PacketInfo::EndToEnd) {
+    CHECK(!auth_key.empty());
     TRY_STATUS(read_e2e_crypto(message, auth_key, packet_info, &data));
   } else if (packet_info->no_crypto_flag) {
     TRY_STATUS(read_no_crypto(message, packet_info, &data));

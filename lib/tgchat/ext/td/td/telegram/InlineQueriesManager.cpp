@@ -22,6 +22,7 @@
 #include "td/telegram/Global.h"
 #include "td/telegram/InputInvoice.h"
 #include "td/telegram/InputMessageText.h"
+#include "td/telegram/KeyboardButton.h"
 #include "td/telegram/LinkManager.h"
 #include "td/telegram/Location.h"
 #include "td/telegram/MessageContent.h"
@@ -33,6 +34,7 @@
 #include "td/telegram/PhotoFormat.h"
 #include "td/telegram/PhotoSize.h"
 #include "td/telegram/ReplyMarkup.h"
+#include "td/telegram/RichMessage.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/TargetDialogTypes.h"
 #include "td/telegram/Td.h"
@@ -273,7 +275,7 @@ class SavePreparedKeyboardButtonQuery final : public Td::ResultHandler {
 
   void send(telegram_api::object_ptr<telegram_api::InputUser> &&input_user, const KeyboardButton &keyboard_button) {
     send_query(G()->net_query_creator().create(
-        telegram_api::bots_requestWebViewButton(std::move(input_user), get_input_keyboard_button(keyboard_button))));
+        telegram_api::bots_requestWebViewButton(std::move(input_user), keyboard_button.get_input_keyboard_button())));
   }
 
   void on_result(BufferSlice packet) final {
@@ -318,14 +320,15 @@ class GetRequestedWebViewButtonQuery final : public Td::ResultHandler {
 
     auto ptr = result_ptr.move_as_ok();
     LOG(INFO) << "Receive result for GetRequestedWebViewButtonQuery: " << to_string(ptr);
-    if (ptr->get_id() != telegram_api::keyboardButtonRequestPeer::ID) {
+    const auto keyboard_button = KeyboardButton(std::move(ptr));
+    const auto *requested_dialog_type = keyboard_button.get_requested_dialog_type();
+    if (requested_dialog_type == nullptr) {
       LOG(ERROR) << to_string(ptr);
       return on_error(Status::Error(500, "Receive invalid button type"));
     }
-    auto keyboard_button = get_keyboard_button(std::move(ptr));
     td_->inline_queries_manager_->on_get_requested_web_view_button(bot_user_id_, prepared_button_id_,
-                                                                   keyboard_button.requested_dialog_type.get());
-    promise_.set_value(get_keyboard_button_object(keyboard_button));
+                                                                   requested_dialog_type);
+    promise_.set_value(keyboard_button.get_keyboard_button_object());
   }
 
   void on_error(Status status) final {
@@ -334,10 +337,11 @@ class GetRequestedWebViewButtonQuery final : public Td::ResultHandler {
 };
 
 class RequestSimpleWebViewQuery final : public Td::ResultHandler {
-  Promise<string> promise_;
+  Promise<td_api::object_ptr<td_api::webAppUrl>> promise_;
 
  public:
-  explicit RequestSimpleWebViewQuery(Promise<string> &&promise) : promise_(std::move(promise)) {
+  explicit RequestSimpleWebViewQuery(Promise<td_api::object_ptr<td_api::webAppUrl>> &&promise)
+      : promise_(std::move(promise)) {
   }
 
   void send(tl_object_ptr<telegram_api::InputUser> &&input_user, string url, const WebAppOpenParameters &parameters) {
@@ -383,7 +387,7 @@ class RequestSimpleWebViewQuery final : public Td::ResultHandler {
     auto ptr = result_ptr.move_as_ok();
     LOG(INFO) << "Receive result for RequestSimpleWebViewQuery: " << to_string(ptr);
     LOG_IF(ERROR, ptr->query_id_ != 0) << "Receive " << to_string(ptr);
-    promise_.set_value(std::move(ptr->url_));
+    promise_.set_value(td_api::make_object<td_api::webAppUrl>(ptr->url_, ptr->same_origin_));
   }
 
   void on_error(Status status) final {
@@ -577,6 +581,23 @@ Result<tl_object_ptr<telegram_api::InputBotInlineMessage>> InlineQueriesManager:
         flags, input_message_text.disable_web_page_preview, input_message_text.show_above_text,
         std::move(input_message_text.text.text), std::move(entities), std::move(input_reply_markup));
   }
+  if (constructor_id == td_api::inputMessageRichMessage::ID) {
+    TRY_RESULT(
+        rich_message,
+        RichMessage::get_rich_message(
+            td_, DialogId(),
+            std::move(static_cast<td_api::inputMessageRichMessage *>(input_message_content.get())->message_), true));
+    auto input_rich_message = rich_message.get_input_rich_message(td_);
+    if (input_rich_message == nullptr) {
+      return Status::Error(400, "Invalid inline message content specified");
+    }
+    int32 flags = 0;
+    if (input_reply_markup != nullptr) {
+      flags |= telegram_api::inputBotInlineMessageRichMessage::REPLY_MARKUP_MASK;
+    }
+    return telegram_api::make_object<telegram_api::inputBotInlineMessageRichMessage>(
+        flags, std::move(input_reply_markup), std::move(input_rich_message));
+  }
   if (constructor_id == td_api::inputMessageContact::ID) {
     TRY_RESULT(contact, process_input_message_contact(td_, std::move(input_message_content)));
     return contact.get_input_bot_inline_message_media_contact(std::move(input_reply_markup));
@@ -586,7 +607,7 @@ Result<tl_object_ptr<telegram_api::InputBotInlineMessage>> InlineQueriesManager:
                InputInvoice::process_input_message_invoice(std::move(input_message_content), td_, DialogId()));
     return input_invoice.get_input_bot_inline_message_media_invoice(std::move(input_reply_markup), td_);
   }
-  if (constructor_id == td_api::inputMessageLocation::ID) {
+  if (constructor_id == td_api::inputMessageLocation::ID || constructor_id == td_api::inputMessageLiveLocation::ID) {
     TRY_RESULT(location, process_input_message_location(std::move(input_message_content)));
     int32 flags = 0;
     if (input_reply_markup != nullptr) {
@@ -720,7 +741,11 @@ void InlineQueriesManager::answer_inline_query(
     }
   }
 
-  vector<tl_object_ptr<telegram_api::InputBotInlineResult>> results;
+  if (input_results.size() > MAX_INLINE_QUERY_RESULT_COUNT) {
+    return promise.set_error(400, "Too many inline query results specified");
+  }
+
+  vector<telegram_api::object_ptr<telegram_api::InputBotInlineResult>> results;
   bool is_gallery = false;
   bool force_vertical = false;
   for (auto &input_result : input_results) {
@@ -787,7 +812,7 @@ void InlineQueriesManager::save_prepared_keyboard_button(UserId user_id,
                                                          td_api::object_ptr<td_api::keyboardButton> &&button,
                                                          Promise<string> &&promise) {
   TRY_RESULT_PROMISE(promise, input_user, td_->user_manager_->get_input_user(user_id));
-  TRY_RESULT_PROMISE(promise, keyboard_button, get_keyboard_button(std::move(button), true));
+  TRY_RESULT_PROMISE(promise, keyboard_button, KeyboardButton::get_keyboard_button(std::move(button), true));
 
   td_->create_handler<SavePreparedKeyboardButtonQuery>(std::move(promise))
       ->send(std::move(input_user), keyboard_button);
@@ -818,7 +843,8 @@ const RequestedDialogType *InlineQueriesManager::get_requested_dialog_type(UserI
 }
 
 void InlineQueriesManager::get_simple_web_view_url(UserId bot_user_id, string &&url,
-                                                   const WebAppOpenParameters &parameters, Promise<string> &&promise) {
+                                                   const WebAppOpenParameters &parameters,
+                                                   Promise<td_api::object_ptr<td_api::webAppUrl>> &&promise) {
   TRY_RESULT_PROMISE(promise, input_user, td_->user_manager_->get_input_user(bot_user_id));
   TRY_RESULT_PROMISE(promise, bot_data, td_->user_manager_->get_bot_data(bot_user_id));
   on_dialog_used(TopDialogCategory::BotApp, DialogId(bot_user_id), G()->unix_time());
@@ -2420,9 +2446,9 @@ bool InlineQueriesManager::load_recently_used_bots(Promise<Unit> &promise) {
   return false;
 }
 
-void InlineQueriesManager::on_new_query(int64 query_id, UserId sender_user_id, Location user_location,
-                                        tl_object_ptr<telegram_api::InlineQueryPeerType> peer_type, const string &query,
-                                        const string &offset) {
+void InlineQueriesManager::on_new_inline_query(int64 query_id, UserId sender_user_id, Location user_location,
+                                               telegram_api::object_ptr<telegram_api::InlineQueryPeerType> peer_type,
+                                               const string &query, const string &offset) {
   if (!sender_user_id.is_valid()) {
     LOG(ERROR) << "Receive new inline query from invalid " << sender_user_id;
     return;

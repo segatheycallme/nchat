@@ -45,9 +45,6 @@ ActorOwn<> get_simple_config_google_dns(Promise<SimpleConfigResult> promise, boo
 ActorOwn<> get_simple_config_mozilla_dns(Promise<SimpleConfigResult> promise, bool prefer_ipv6, Slice domain_name,
                                          bool is_test, int32 scheduler_id);
 
-ActorOwn<> get_simple_config_firebase_remote_config(Promise<SimpleConfigResult> promise, bool prefer_ipv6,
-                                                    Slice domain_name, bool is_test, int32 scheduler_id);
-
 ActorOwn<> get_simple_config_firebase_realtime(Promise<SimpleConfigResult> promise, bool prefer_ipv6, Slice domain_name,
                                                bool is_test, int32 scheduler_id);
 
@@ -63,11 +60,11 @@ class ConfigManager final : public NetQueryCallback {
 
   void lazy_request_config();
 
-  void reget_config(Promise<Unit> &&promise);
+  void reload_config(Promise<Unit> &&promise);
 
   void get_app_config(Promise<td_api::object_ptr<td_api::JsonValue>> &&promise);
 
-  void reget_app_config(Promise<Unit> &&promise);
+  void reload_app_config(Promise<Unit> &&promise);
 
   void get_content_settings(Promise<Unit> &&promise);
 
@@ -77,7 +74,7 @@ class ConfigManager final : public NetQueryCallback {
 
  private:
   struct AppConfig {
-    static constexpr int32 CURRENT_VERSION = 126;
+    static constexpr int32 CURRENT_VERSION = 135;
     int32 version_ = 0;
     int32 hash_ = 0;
     telegram_api::object_ptr<telegram_api::JSONValue> config_;
@@ -98,10 +95,10 @@ class ConfigManager final : public NetQueryCallback {
 
   FloodControlStrict lazy_request_flood_control_;
 
-  vector<Promise<Unit>> reget_config_queries_;
+  vector<Promise<Unit>> reload_config_queries_;
 
   vector<Promise<td_api::object_ptr<td_api::JsonValue>>> get_app_config_queries_;
-  vector<Promise<Unit>> reget_app_config_queries_;
+  vector<Promise<Unit>> reload_app_config_queries_;
 
   vector<Promise<Unit>> get_content_settings_queries_;
   vector<Promise<Unit>> set_content_settings_queries_[2];

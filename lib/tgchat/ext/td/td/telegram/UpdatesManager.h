@@ -8,6 +8,7 @@
 
 #include "td/telegram/ChannelId.h"
 #include "td/telegram/ChatId.h"
+#include "td/telegram/CommunityId.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/InputGroupCallId.h"
 #include "td/telegram/MessageFullId.h"
@@ -115,6 +116,9 @@ class UpdatesManager final : public Actor {
   static vector<std::pair<const telegram_api::Message *, bool>> get_new_messages(
       const telegram_api::Updates *updates_ptr);
 
+  static vector<const telegram_api::ephemeralMessage *> get_new_ephemeral_messages(
+      const telegram_api::Updates *updates_ptr);
+
   static InputGroupCallId get_update_new_group_call_id(const telegram_api::Updates *updates_ptr);
 
   void process_updates_users_and_chats(telegram_api::Updates *updates_ptr);
@@ -132,6 +136,8 @@ class UpdatesManager final : public Actor {
   static vector<DialogId> get_update_notify_settings_dialog_ids(const telegram_api::Updates *updates_ptr);
 
   static vector<DialogId> get_chat_dialog_ids(const telegram_api::Updates *updates_ptr);
+
+  static CommunityId get_community_id(const telegram_api::Updates *updates_ptr);
 
   static int32 get_update_edit_message_pts(const telegram_api::Updates *updates_ptr, MessageFullId message_full_id);
 
@@ -488,6 +494,8 @@ class UpdatesManager final : public Actor {
 
   bool is_acceptable_channel(ChannelId channel_id) const;
 
+  bool is_acceptable_community(CommunityId community_id) const;
+
   bool is_acceptable_peer(const tl_object_ptr<telegram_api::Peer> &peer) const;
 
   bool is_acceptable_message_entities(const vector<tl_object_ptr<telegram_api::MessageEntity>> &message_entities) const;
@@ -507,19 +515,35 @@ class UpdatesManager final : public Actor {
   bool is_acceptable_update(const telegram_api::Update *update) const;
 
   void on_update(tl_object_ptr<telegram_api::updateNewMessage> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateMessageID> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateReadMessagesContents> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateEditMessage> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateDeleteMessages> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateNewEphemeralMessage> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateEditEphemeralMessage> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateDeleteEphemeralMessages> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateReadHistoryInbox> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateReadHistoryOutbox> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateNotifySettings> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updatePeerSettings> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updatePeerHistoryTTL> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updatePeerLocated> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateWebPage> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateChannelWebPage> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateMessageReactions> update, Promise<Unit> &&promise);
@@ -605,10 +629,13 @@ class UpdatesManager final : public Actor {
   void on_update(tl_object_ptr<telegram_api::updateDialogFilters> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateDialogFilterOrder> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateJoinChatWebViewDecision> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateBotInlineQuery> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateBotInlineSend> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateBotCallbackQuery> update, Promise<Unit> &&promise);
+  void on_update(tl_object_ptr<telegram_api::updateEphemeralBotCallbackQuery> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateInlineBotCallbackQuery> update, Promise<Unit> &&promise);
   void on_update(tl_object_ptr<telegram_api::updateBusinessBotCallbackQuery> update, Promise<Unit> &&promise);
 
@@ -724,6 +751,8 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateNewAuthorization> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateNewBotConnection> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateSmsJob> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateQuickReplies> update, Promise<Unit> &&promise);
@@ -744,11 +773,17 @@ class UpdatesManager final : public Actor {
 
   void on_update(tl_object_ptr<telegram_api::updateBotDeleteBusinessMessage> update, Promise<Unit> &&promise);
 
+  void on_update(tl_object_ptr<telegram_api::updateBotStarsSubscription> update, Promise<Unit> &&promise);
+
   void on_update(tl_object_ptr<telegram_api::updateStarsBalance> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateStarsRevenueStatus> update, Promise<Unit> &&promise);
 
   void on_update(tl_object_ptr<telegram_api::updateAiComposeTones> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateWebBrowserSettings> update, Promise<Unit> &&promise);
+
+  void on_update(tl_object_ptr<telegram_api::updateWebBrowserException> update, Promise<Unit> &&promise);
 
   // unsupported updates
 

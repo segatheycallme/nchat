@@ -765,6 +765,9 @@ Result<std::tuple<uint64, BufferSlice, int32>> SecretChatActor::decrypt(BufferSl
   CHECK(is_aligned_pointer<4>(data.data()));
   TRY_RESULT(auth_key_id, mtproto::Transport::read_auth_key_id(data));
   mtproto::AuthKey *auth_key = nullptr;
+  if (auth_key_id == 0) {
+    return Status::Error(1, "Invalid auth_key_id");
+  }
   if (auth_key_id == pfs_state_.auth_key.id()) {
     auth_key = &pfs_state_.auth_key;
   } else if (auth_key_id == pfs_state_.other_auth_key.id()) {
@@ -773,6 +776,7 @@ Result<std::tuple<uint64, BufferSlice, int32>> SecretChatActor::decrypt(BufferSl
     return Status::Error(1, PSLICE() << "Unknown " << tag("auth_key_id", format::as_hex(auth_key_id))
                                      << tag("crc", crc64(encrypted_message.as_slice())));
   }
+  CHECK(!auth_key->empty());
 
   std::array<int, 2> versions{{2, 1}};
   BufferSlice encrypted_message_copy;
@@ -788,7 +792,7 @@ Result<std::tuple<uint64, BufferSlice, int32>> SecretChatActor::decrypt(BufferSl
     mtproto_version = versions[i];
     packet_info.version = mtproto_version;
     packet_info.is_creator = auth_state_.x == 0;
-    r_read_result = mtproto::Transport::read(data, *auth_key, &packet_info);
+    r_read_result = mtproto::Transport::read(data, 0, *auth_key, &packet_info);
     if (i + 1 != versions.size() && r_read_result.is_error()) {
       if (config_state_.his_layer >= static_cast<int32>(SecretChatLayer::Mtproto2)) {
         LOG(WARNING) << tag("mtproto", mtproto_version) << " decryption failed " << r_read_result.error();
@@ -1800,8 +1804,7 @@ Status SecretChatActor::on_update_chat(telegram_api::encryptedChatDiscarded &upd
 
 Status SecretChatActor::on_update_chat(NetQueryPtr query) {
   static_assert(std::is_same<telegram_api::messages_requestEncryption::ReturnType,
-                             telegram_api::messages_acceptEncryption::ReturnType>::value,
-                "");
+                             telegram_api::messages_acceptEncryption::ReturnType>::value);
   TRY_RESULT(config, fetch_result<telegram_api::messages_requestEncryption>(std::move(query)));
   TRY_STATUS(on_update_chat(std::move(config)));
   if (auth_state_.state == State::WaitRequestResponse) {

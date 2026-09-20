@@ -39,7 +39,7 @@ import (
 	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
 	"go.mau.fi/mautrix-signal/pkg/signalid"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/signalpb"
 )
 
 var (
@@ -180,10 +180,46 @@ func (s *SignalClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matri
 	if err != nil {
 		return bridgev2.WrapErrorInStatus(err).WithSendNotice(true)
 	}
+	prevID := msg.EditTarget.ID
 	msg.EditTarget.ID = signalid.MakeMessageID(s.Client.Store.ACI, ts)
 	msg.EditTarget.Metadata = &signalid.MessageMetadata{ContainsAttachments: len(converted.Attachments) > 0}
 	msg.EditTarget.EditCount++
+	if prevID != msg.EditTarget.ID {
+		err = s.Main.Bridge.DB.DoTxn(ctx, nil, func(ctx context.Context) error {
+			err = s.Main.Bridge.DB.Message.Update(ctx, msg.EditTarget)
+			if err != nil {
+				return err
+			}
+			err = saveEditStub(ctx, s.Main.Bridge, prevID, msg.EditTarget)
+			if err != nil {
+				return fmt.Errorf("failed to save edit stub: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).
+				Str("prev_message_id", string(prevID)).
+				Str("message_id", string(msg.EditTarget.ID)).
+				Msg("Failed to save message after editing")
+		}
+	}
 	return nil
+}
+
+// saveEditStub saves a placeholder message row pointing at the pre-edit ID of a message, such that
+// duplicate checks on incoming edits find it and are dropped. This is necessary because the first
+// time we see an edit it modifies the ID in place.
+func saveEditStub(ctx context.Context, bridge *bridgev2.Bridge, prevID networkid.MessageID, target *database.Message) error {
+	stub := &database.Message{
+		ID:         prevID,
+		PartID:     editStubPartID,
+		Room:       target.Room,
+		SenderID:   target.SenderID,
+		SenderMXID: target.SenderMXID,
+		Timestamp:  target.Timestamp,
+	}
+	stub.SetFakeMXID()
+	return bridge.DB.Message.Insert(ctx, stub)
 }
 
 func (s *SignalClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
@@ -538,7 +574,7 @@ func (s *SignalClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2
 	if err != nil {
 		return nil, err
 	}
-	if msg.Type == bridgev2.Invite && targetSignalID.Type != libsignalgo.ServiceIDTypePNI {
+	if (msg.Type == bridgev2.Invite || msg.Type == bridgev2.AcceptKnock) && targetSignalID.Type != libsignalgo.ServiceIDTypePNI {
 		err = targetIntent.EnsureJoined(ctx, msg.Portal.MXID)
 		if err != nil {
 			return nil, err
@@ -811,7 +847,8 @@ func (s *SignalClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.M
 	if err != nil {
 		return nil, err
 	}
-	mxOptions := msg.VoteTo.Metadata.(*signalid.MessageMetadata).MatrixPollOptionIDs
+	meta := msg.VoteTo.Metadata.(*signalid.MessageMetadata)
+	mxOptions := meta.MatrixPollOptionIDs
 	optionIndexes := make([]uint32, len(msg.Content.Response.Answers))
 	for i, answer := range msg.Content.Response.Answers {
 		if idx := slices.Index(mxOptions, answer); idx >= 0 {
@@ -822,12 +859,20 @@ func (s *SignalClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.M
 			return nil, fmt.Errorf("unknown poll answer ID: %s", answer)
 		}
 	}
+	if meta.VoteCount == nil {
+		meta.VoteCount = make(map[string]uint32)
+	}
+	meta.VoteCount[s.Client.Store.ACI.String()]++
+	err = s.Main.Bridge.DB.Message.Update(ctx, msg.VoteTo)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to update poll message with new vote count")
+	}
 	converted := &signalpb.DataMessage{
 		PollVote: &signalpb.DataMessage_PollVote{
 			TargetAuthorAciBinary: senderACI[:],
 			TargetSentTimestamp:   &msgTS,
 			OptionIndexes:         optionIndexes,
-			VoteCount:             proto.Uint32(1), // TODO
+			VoteCount:             proto.Uint32(meta.VoteCount[s.Client.Store.ACI.String()]),
 		},
 		RequiredProtocolVersion: proto.Uint32(0),
 	}

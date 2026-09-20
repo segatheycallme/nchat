@@ -34,7 +34,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/signalpb"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
@@ -74,6 +74,15 @@ type ProvisioningResponse struct {
 	ProvisioningURL  string
 	ProvisioningData *store.DeviceData
 	Err              error
+}
+
+type DeviceLinkError struct {
+	StatusCode int
+	Message    string
+}
+
+func (dle DeviceLinkError) Error() string {
+	return fmt.Sprintf("non-200 status code (%d) from devices response: %s", dle.StatusCode, dle.Message)
 }
 
 func PerformProvisioning(ctx context.Context, deviceStore store.DeviceStore, deviceName string, allowBackup bool) chan ProvisioningResponse {
@@ -268,7 +277,7 @@ func startProvisioning(ctx context.Context, ws *websocket.Conn, provisioningCiph
 		return "", fmt.Errorf("failed to unmarshal provisioning UUID: %w", err)
 	}
 
-	linkCapabilities := []string{"backup4,backup5"}
+	linkCapabilities := []string{"backup5"}
 	if !allowBackup {
 		linkCapabilities = []string{}
 	}
@@ -328,8 +337,9 @@ func continueProvisioning(ctx context.Context, ws *websocket.Conn, provisioningC
 }
 
 var signalCapabilities = map[string]any{
-	"attachmentBackfill": true,
-	"spqr":               true,
+	"attachmentBackfill":        true,
+	"spqr":                      true,
+	"usernameChangeSyncMessage": true,
 }
 
 var signalCapabilitiesBody = exerrors.Must(json.Marshal(signalCapabilities))
@@ -440,9 +450,9 @@ func confirmDevice(
 		return nil, fmt.Errorf("failed to read from websocket after devices call: %w", err)
 	}
 
-	status := int(*receivedMsg.Response.Status)
+	status := int(receivedMsg.GetResponse().GetStatus())
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("non-200 status code (%d) from devices response: %s", status, *receivedMsg.Response.Message)
+		return nil, DeviceLinkError{StatusCode: status, Message: receivedMsg.GetResponse().GetMessage()}
 	}
 
 	// unmarshal JSON response into ConfirmDeviceResponse

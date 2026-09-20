@@ -18,12 +18,20 @@ package libsignalgo
 
 /*
 #include "./libsignal-ffi.h"
+#include <stdlib.h>
 */
 import "C"
 import "unsafe"
 
-func CopyCStringToString(cString *C.char) (s string) {
-	s = C.GoString(cString)
+func GoStringToCString(str string) (C.SignalCStringPtr, func()) {
+	cStr := C.CString(str)
+	return C.SignalCStringPtr(unsafe.Pointer(cStr)), func() {
+		C.free(unsafe.Pointer(cStr))
+	}
+}
+
+func CopyCStringToString(cString C.SignalCStringPtr) (s string) {
+	s = C.GoString((*C.char)(unsafe.Pointer(cString)))
 	C.signal_free_string(cString)
 	return
 }

@@ -17,7 +17,6 @@
 #include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/misc.h"
 #include "td/telegram/OptionManager.h"
-#include "td/telegram/PhotoFormat.h"
 #include "td/telegram/secret_api.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/td_api.h"
@@ -155,10 +154,7 @@ td_api::object_ptr<td_api::animation> AnimationsManager::get_animation_object(Fi
 
   auto animation = get_animation(file_id);
   CHECK(animation != nullptr);
-  auto thumbnail =
-      animation->animated_thumbnail.file_id.is_valid()
-          ? get_thumbnail_object(td_->file_manager_.get(), animation->animated_thumbnail, PhotoFormat::Mpeg4)
-          : get_thumbnail_object(td_->file_manager_.get(), animation->thumbnail, PhotoFormat::Jpeg);
+  auto thumbnail = get_thumbnail_object(td_->file_manager_.get(), animation->thumbnail, animation->animated_thumbnail);
   return make_tl_object<td_api::animation>(animation->duration, animation->dimensions.width,
                                            animation->dimensions.height, animation->file_name, animation->mime_type,
                                            animation->has_stickers, get_minithumbnail_object(animation->minithumbnail),
@@ -254,6 +250,9 @@ void AnimationsManager::merge_animations(FileId new_id, FileId old_id) {
     dup_animation(new_id, old_id);
   } else {
     if (new_->file_name.size() == old_->file_name.size() + 4 && new_->file_name == old_->file_name + ".mp4") {
+      need_merge = false;
+    }
+    if (new_->file_name.size() == old_->file_name.size() + 5 && new_->file_name == old_->file_name + ".webm") {
       need_merge = false;
     }
   }

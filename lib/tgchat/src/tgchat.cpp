@@ -50,7 +50,7 @@
 // For development testing of sponsored messages only
 // #define SIMULATED_SPONSORED_MESSAGES
 
-static const int s_TdlibDate = 20260508;
+static const int s_TdlibDate = 20260824;
 
 namespace detail
 {
@@ -954,40 +954,52 @@ void TgChat::Impl::PerformRequest(std::shared_ptr<RequestMessage> p_RequestMessa
           if (isSendAsSpecial && (mimeSubType == "webp"))
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessageSticker>();
-            message_content->sticker_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->sticker_ = td::td_api::make_object<td::td_api::inputSticker>();
+            message_content->sticker_->sticker_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             send_message->input_message_content_ = std::move(message_content);
           }
           else if (isSendAsSpecial && (mimeSubType == "mp4" || mimeSubType == "x-m4v" || mimeSubType == "gif"))
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessageAnimation>();
-            message_content->animation_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->animation_ = td::td_api::make_object<td::td_api::inputAnimation>();
+            message_content->animation_->animation_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             send_message->input_message_content_ = std::move(message_content);
           }
           else if (attachmentSendType && (mimeType == "audio"))
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessageAudio>();
-            message_content->audio_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->audio_ = td::td_api::make_object<td::td_api::inputAudio>();
+            message_content->audio_->audio_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             message_content->caption_ = std::move(formatted_text);
             send_message->input_message_content_ = std::move(message_content);
           }
           else if (attachmentSendType && (mimeType == "video"))
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessageVideo>();
-            message_content->video_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->video_ = td::td_api::make_object<td::td_api::inputVideo>();
+            message_content->video_->video_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             message_content->caption_ = std::move(formatted_text);
             send_message->input_message_content_ = std::move(message_content);
           }
           else if (attachmentSendType && (mimeType == "image"))
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessagePhoto>();
-            message_content->photo_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->photo_ = td::td_api::make_object<td::td_api::inputPhoto>();
+            message_content->photo_->photo_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             message_content->caption_ = std::move(formatted_text);
             send_message->input_message_content_ = std::move(message_content);
           }
           else
           {
             auto message_content = td::td_api::make_object<td::td_api::inputMessageDocument>();
-            message_content->document_ = td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
+            message_content->document_ = td::td_api::make_object<td::td_api::inputDocument>();
+            message_content->document_->document_ =
+              td::td_api::make_object<td::td_api::inputFileLocal>(fileInfo.filePath);
             message_content->caption_ = std::move(formatted_text);
             send_message->input_message_content_ = std::move(message_content);
           }
@@ -3229,6 +3241,90 @@ std::string TgChat::Impl::GetText(td::td_api::object_ptr<td::td_api::formattedTe
   return text;
 }
 
+static std::string TrimVcardStr(const std::string& p_Str)
+{
+  static const std::string whitespace = " \t\r\n";
+  const size_t begin = p_Str.find_first_not_of(whitespace);
+  if (begin == std::string::npos) return std::string();
+
+  const size_t end = p_Str.find_last_not_of(whitespace);
+  return p_Str.substr(begin, end - begin + 1);
+}
+
+// Get values of a vCard field (ex: "TEL", "EMAIL"), ignoring any item group prefix and type params,
+// i.e. "item1.EMAIL;type=INTERNET:a@b.c" is treated as field "EMAIL" with value "a@b.c".
+static std::vector<std::string> GetVcardValues(const std::string& p_Vcard, const std::string& p_Field)
+{
+  std::vector<std::string> values;
+  const std::vector<std::string> lines = StrUtil::Split(p_Vcard, '\n');
+  for (const auto& line : lines)
+  {
+    const size_t colonPos = line.find(':');
+    if (colonPos == std::string::npos) continue;
+
+    std::string field = line.substr(0, colonPos);
+    const size_t semiPos = field.find(';');
+    if (semiPos != std::string::npos)
+    {
+      field = field.substr(0, semiPos);
+    }
+
+    const size_t dotPos = field.find('.');
+    if (dotPos != std::string::npos)
+    {
+      field = field.substr(dotPos + 1);
+    }
+
+    if (StrUtil::ToLower(TrimVcardStr(field)) != StrUtil::ToLower(p_Field)) continue;
+
+    const std::string value = TrimVcardStr(line.substr(colonPos + 1));
+    if (value.empty()) continue;
+
+    values.push_back(value);
+  }
+
+  return values;
+}
+
+// Format a contact card as "[Contact]" tag on its own line, followed by "Field: value" lines.
+static std::string GetContactText(const td::td_api::contact& p_Contact)
+{
+  std::vector<std::string> lines;
+
+  std::string name = p_Contact.first_name_;
+  if (!p_Contact.last_name_.empty())
+  {
+    if (!name.empty())
+    {
+      name += " ";
+    }
+
+    name += p_Contact.last_name_;
+  }
+
+  name = TrimVcardStr(name);
+  if (!name.empty())
+  {
+    lines.push_back("Name: " + name);
+  }
+
+  const std::string phone = TrimVcardStr(p_Contact.phone_number_);
+  if (!phone.empty())
+  {
+    lines.push_back("Phone: " + phone);
+  }
+
+  const std::vector<std::string> emails = GetVcardValues(p_Contact.vcard_, "EMAIL");
+  if (!emails.empty())
+  {
+    lines.push_back("Email: " + StrUtil::Join(emails, ", "));
+  }
+
+  if (lines.empty()) return "[Contact]";
+
+  return "[Contact]\n" + StrUtil::Join(lines, "\n");
+}
+
 void TgChat::Impl::TdMessageContentConvert(td::td_api::MessageContent& p_TdMessageContent, int64_t p_SenderId,
                                            std::string& p_Text, std::string& p_FileInfo)
 {
@@ -3296,19 +3392,16 @@ void TgChat::Impl::TdMessageContentConvert(td::td_api::MessageContent& p_TdMessa
   }
   else if (p_TdMessageContent.get_id() == td::td_api::messageContact::ID)
   {
-    p_Text = "[Contact]";
+    auto& messageContact = static_cast<td::td_api::messageContact&>(p_TdMessageContent);
+    p_Text = GetContactText(*messageContact.contact_);
   }
   else if (p_TdMessageContent.get_id() == td::td_api::messageLocation::ID)
   {
-    auto& messageLocation = static_cast<td::td_api::messageLocation&>(p_TdMessageContent);
-    if (messageLocation.live_period_ == 0)
-    {
-      p_Text = "[Location]";
-    }
-    else
-    {
-      p_Text = "[LiveLocation]";
-    }
+    p_Text = "[Location]";
+  }
+  else if (p_TdMessageContent.get_id() == td::td_api::messageLiveLocation::ID)
+  {
+    p_Text = "[LiveLocation]";
   }
   else if (p_TdMessageContent.get_id() == td::td_api::messageContactRegistered::ID)
   {

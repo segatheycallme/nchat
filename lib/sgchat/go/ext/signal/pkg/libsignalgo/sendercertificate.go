@@ -44,10 +44,14 @@ func wrapSenderCertificate(ptr *C.SignalSenderCertificate) *SenderCertificate {
 // the Swift bindings).
 func NewSenderCertificate(sender *SealedSenderAddress, publicKey *PublicKey, expiration time.Time, signerCertificate *ServerCertificate, signerKey *PrivateKey) (*SenderCertificate, error) {
 	var sc C.SignalMutPointerSenderCertificate
+	senderUUIDStr, freeSenderUUIDStr := GoStringToCString(sender.UUID.String())
+	defer freeSenderUUIDStr()
+	senderE164Str, freeSenderE164Str := GoStringToCString(sender.E164)
+	defer freeSenderE164Str()
 	signalFfiError := C.signal_sender_certificate_new(
 		&sc,
-		C.CString(sender.UUID.String()),
-		C.CString(sender.E164),
+		senderUUIDStr,
+		senderE164Str,
 		C.uint32_t(sender.DeviceID),
 		publicKey.constPtr(),
 		C.uint64_t(expiration.UnixMilli()),
@@ -135,7 +139,7 @@ func (sc *SenderCertificate) GetSignature() ([]byte, error) {
 }
 
 func (sc *SenderCertificate) GetSenderUUID() (uuid.UUID, error) {
-	var rawUUID *C.char
+	var rawUUID C.SignalCStringPtr
 	signalFfiError := C.signal_sender_certificate_get_sender_uuid(&rawUUID, sc.constPtr())
 	runtime.KeepAlive(sc)
 	if signalFfiError != nil {
@@ -145,7 +149,7 @@ func (sc *SenderCertificate) GetSenderUUID() (uuid.UUID, error) {
 }
 
 func (sc *SenderCertificate) GetSenderE164() (string, error) {
-	var e164 *C.char
+	var e164 C.SignalCStringPtr
 	signalFfiError := C.signal_sender_certificate_get_sender_e164(&e164, sc.constPtr())
 	runtime.KeepAlive(sc)
 	if signalFfiError != nil {
@@ -204,6 +208,7 @@ func (sc *SenderCertificate) Validate(trustRoots []*PublicKey, ts time.Time) (bo
 		C.uint64_t(ts.UnixMilli()),
 	)
 	runtime.KeepAlive(sc)
+	runtime.KeepAlive(trustRoots)
 	runtime.KeepAlive(constRoots)
 	if signalFfiError != nil {
 		return false, wrapError(signalFfiError)

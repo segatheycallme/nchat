@@ -17,6 +17,7 @@
 #include "log.h"
 #include "messagecache.h"
 #include "protocolutil.h"
+#include "setuputil.h"
 #include "status.h"
 #include "strutil.h"
 #include "timeutil.h"
@@ -64,7 +65,8 @@ bool WmChat::HasFeature(ProtocolFeature p_ProtocolFeature) const
     FeatureEditMessagesWithinFifteenMins |
     FeatureAutoGetContactsOnLogin |
     FeaturePinChat |
-    FeatureArchiveChat;
+    FeatureArchiveChat |
+    FeaturePresenceRequiresOnline;
   return (p_ProtocolFeature & customFeatures);
 }
 
@@ -1043,14 +1045,17 @@ void WmNewMessageIsPinnedNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int
   free(p_MsgId);
 }
 
-void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FilePath, int p_FileStatus,
-                            int p_Action)
+void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FileId, char* p_FilePath,
+                            int p_FileStatus, int p_Action)
 {
   WmChat* instance = WmChat::GetInstance(p_ConnId);
   if (instance != nullptr)
   {
     FileInfo fileInfo;
     fileInfo.fileStatus = static_cast<FileStatus>(p_FileStatus);
+    // retain file id (provided by the caller) so the attachment can be downloaded again if its
+    // file is later removed, ex: when user clears the profile tmp dir between sessions.
+    fileInfo.fileId = std::string(p_FileId);
     fileInfo.filePath = std::string(p_FilePath);
 
     std::shared_ptr<NewMessageFileNotify> newMessageFileNotify =
@@ -1067,6 +1072,7 @@ void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p
 
   free(p_ChatId);
   free(p_MsgId);
+  free(p_FileId);
   free(p_FilePath);
 }
 
@@ -1300,6 +1306,11 @@ void WmAppConfigSetNum(char* p_Param, int p_Value)
 {
   AppConfig::SetNum(std::string(p_Param), p_Value);
   free(p_Param);
+}
+
+int WmHasGui()
+{
+  return SetupUtil::HasGui() ? 1 : 0;
 }
 
 void WmLogTrace(char* p_Filename, int p_LineNo, char* p_Message)

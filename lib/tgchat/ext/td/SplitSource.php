@@ -329,6 +329,7 @@ function split_file($file, $chunks, $undo) {
             'ChatId' => 'ChatId',
             'chat_manager[_(-](?![.]get[(][)])|ChatManager([^ ;.]| [^*])' => 'ChatManager',
             'common_dialog_manager[_(-](?![.]get[(][)])|CommonDialogManager' => 'CommonDialogManager',
+            'community_manager[_(-](?![.]get[(][)])|CommunityManager([^ ;.]| [^*])' => 'CommunityManager',
             'connection_state_manager[_(-](?![.]get[(][)])|ConnectionStateManager' => 'ConnectionStateManager',
             'country_info_manager[_(-](?![.]get[(][)])|CountryInfoManager' => 'CountryInfoManager',
             'CurrencyAmount' => 'CurrencyAmount',
@@ -352,12 +353,14 @@ function split_file($file, $chunks, $undo) {
             'documents_manager[_(-](?![.]get[(][)])|DocumentsManager' => 'DocumentsManager',
             'download_manager[_(-](?![.]get[(][)])|DownloadManager[^C]' => 'DownloadManager',
             'DownloadManagerCallback' => 'DownloadManagerCallback',
+            'draft_message_manager[_(-](?![.]get[(][)])|DraftMessageManager' => 'DraftMessageManager',
             'EmailVerification' => 'EmailVerification',
             'EmojiGroup' => 'EmojiGroup',
             'FactCheck' => 'FactCheck',
             'file_reference_manager[_(-](?![.]get[(][)])|FileReferenceManager|file_references[)]' => 'FileReferenceManager',
             'file_manager[_(-](?![.]get[(][)])|FileManager([^ ;.]| [^*])|update_file[)]' => 'files/FileManager',
             'FolderId' => 'FolderId',
+            'FormattedDate' => 'FormattedDate',
             'ForumTopicFullId' => 'ForumTopicFullId',
             'ForumTopicId' => 'ForumTopicId',
             'forum_topic_manager[_(-](?![.]get[(][)])|ForumTopicManager' => 'ForumTopicManager',
@@ -378,6 +381,7 @@ function split_file($file, $chunks, $undo) {
             'language_pack_manager[_(-]|LanguagePackManager' => 'LanguagePackManager',
             'link_manager[_(-](?![.]get[(][)])|LinkManager' => 'LinkManager',
             'LogeventIdWithGeneration|add_log_event|delete_log_event|get_erase_log_event_promise|parse_time|store_time' => 'logevent/LogEventHelper',
+            'MessageContentUploadId' => 'MessageContentUploadId'
             'MessageCopyOptions' => 'MessageCopyOptions',
             'MessageCover' => 'MessageCover',
             'MessageEffectId' => 'MessageEffectId',
@@ -426,6 +430,9 @@ function split_file($file, $chunks, $undo) {
             'referral_program_manager[_(-](?![.]get[(][)])|ReferralProgramManager' => 'ReferralProgramManager',
             'ReferralProgramParameters' => 'ReferralProgramParameters',
             'RequestActor|RequestOnceActor' => 'RequestActor',
+            'RichButtonStyle' => 'RuchButtonStyle',
+            'RichMessage[^M]' => 'RichMessage',
+            'RichMessageMedia' => 'RichMessageMedia',
             'saved_messages_manager[_(-](?![.]get[(][)])|SavedMessagesManager' => 'SavedMessagesManager',
             'ScopeNotificationSettings|[a-z_]*_scope_notification_settings' => 'ScopeNotificationSettings',
             'SearchPostsFlood' => 'SearchPostsFlood',
@@ -495,8 +502,12 @@ function split_file($file, $chunks, $undo) {
             'voice_notes_manager[_(-](?![.]get[(][)])|VoiceNotesManager' => 'VoiceNotesManager',
             'web_app_manager[_(-](?![.]get[(][)])|WebAppManager' => 'WebAppManager',
             'WebAppOpenParameters' => 'WebAppOpenParameters',
+            'web_browser_manager[_(-](?![.]get[(][)])|WebBrowserManager' => 'WebBrowserManager',
+            'WebBrowserSettings' => 'WebBrowserSettings',
+            'WebDomainException' => 'WebDomainException',
             'WebPageId(Hash)?' => 'WebPageId',
-            'web_pages_manager[_(-](?![.]get[(][)])|WebPagesManager' => 'WebPagesManager');
+            'web_pages_manager[_(-](?![.]get[(][)])|WebPagesManager' => 'WebPagesManager',
+            'welcome_message_manager[_(-](?![.]get[(][)])|WelcomeMessageManager' => 'WelcomeMessageManager');
 
         foreach ($td_methods as $pattern => $header) {
             if (strpos($cpp_name, $header) !== false) {

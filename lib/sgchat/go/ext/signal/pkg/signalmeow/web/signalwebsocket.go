@@ -33,7 +33,7 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/exsync"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf/signalpb"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/wspb"
 )
 
@@ -616,13 +616,12 @@ func (s *SignalWebsocket) SendRequest(
 		Path:    &path,
 		Body:    body,
 		Headers: headerArray,
-	}, time.Now(), 0)
+	}, 0)
 }
 
 func (s *SignalWebsocket) sendRequestInternal(
 	ctx context.Context,
 	request *signalpb.WebSocketRequestMessage,
-	startTime time.Time,
 	retryCount int,
 ) (*signalpb.WebSocketResponseMessage, error) {
 	if s.basicAuth != nil {
@@ -632,7 +631,7 @@ func (s *SignalWebsocket) sendRequestInternal(
 	err := s.pushOutgoing(ctx, SignalWebsocketSendMessage{
 		RequestMessage:  request,
 		ResponseChannel: responseChannel,
-		RequestTime:     startTime,
+		RequestTime:     time.Now(),
 	})
 	if err != nil {
 		return nil, err
@@ -657,7 +656,7 @@ func (s *SignalWebsocket) sendRequestInternal(
 			}
 		}
 		zerolog.Ctx(ctx).Warn().Int("retry_count", retryCount).Msg("Received nil response, retrying recursively")
-		return s.sendRequestInternal(ctx, request, startTime, retryCount+1)
+		return s.sendRequestInternal(ctx, request, retryCount+1)
 	}
 	return response, nil
 }

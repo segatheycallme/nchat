@@ -1,3 +1,32 @@
+# v26.09
+
+* Bumped minimum Go version to 1.26.
+* Updated libsignal to v0.102.2.
+* Fixed handling messages with invalid values in formatting body ranges.
+* Fixed websocket request retrying not working correctly if the first attempt
+  times out.
+* Fixed another potential race condition with edited message bridging.
+
+# v26.08
+
+* Updated libsignal to v0.100.0
+* Added support for handling own profile key changes.
+* Changed attachment bridging behavior to match Signal Desktop.
+* Fixed edited messages being bridged twice if certain race conditions occurred.
+
+# v26.07
+
+* Updated Docker image to Alpine 3.24.
+* Updated libsignal to v0.97.2.
+* Added automatic retry when sender key send fails due to missing session.
+* Fixed changing poll votes from Matrix.
+
+# v26.06
+
+* Updated libsignal to v0.94.4.
+* Updated mrenclave to fix looking up phone numbers.
+* Changed knock accept handling to auto-join the ghost user afterwards.
+
 # v26.05
 
 * Updated libsignal to v0.93.2.

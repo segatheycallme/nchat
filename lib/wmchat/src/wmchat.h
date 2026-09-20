@@ -117,8 +117,8 @@ void WmNewMessageIsPinnedNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int
 void WmNewStatusNotify(int p_ConnId, char* p_UserId, int p_IsOnline, int p_TimeSeen);
 void WmNewTypingNotify(int p_ConnId, char* p_ChatId, char* p_UserId, int p_IsTyping);
 void WmNewMessageStatusNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, int p_IsRead);
-void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FilePath, int p_FileStatus,
-                            int p_Action);
+void WmNewMessageFileNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_FileId, char* p_FilePath,
+                            int p_FileStatus, int p_Action);
 void WmNewMessageReactionNotify(int p_ConnId, char* p_ChatId, char* p_MsgId, char* p_SenderId, char* p_Text,
                                 int p_FromMe);
 void WmDeleteChatNotify(int p_ConnId, char* p_ChatId);
@@ -132,6 +132,7 @@ void WmSetStatus(int p_ConnId, int p_Flags);
 void WmClearStatus(int p_ConnId, int p_Flags);
 int WmAppConfigGetNum(char* p_Param);
 void WmAppConfigSetNum(char* p_Param, int p_Value);
+int WmHasGui();
 void WmLogTrace(char* p_Filename, int p_LineNo, char* p_Message);
 void WmLogDebug(char* p_Filename, int p_LineNo, char* p_Message);
 void WmLogInfo(char* p_Filename, int p_LineNo, char* p_Message);

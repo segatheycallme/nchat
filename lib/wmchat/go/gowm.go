@@ -8,13 +8,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"mime"
 	"os"
@@ -49,7 +49,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-var whatsmeowDate int = 20260516
+var whatsmeowDate int = 20260919
 
 type JSONMessage []json.RawMessage
 type JSONMessageType string
@@ -82,6 +82,7 @@ var (
 	handlers    map[int]*WmEventHandler      = make(map[int]*WmEventHandler)
 	sendTypes   map[int]int                  = make(map[int]int)
 	namesSynced map[int]bool                 = make(map[int]bool)
+	passkeyWait map[int]bool                 = make(map[int]bool)
 )
 
 // keep in sync with enum AttachmentSendType in appconfig.h
@@ -218,6 +219,19 @@ func SetState(connId int, status State) {
 	mx.Unlock()
 }
 
+func SetPasskeyWait(connId int, isWait bool) {
+	mx.Lock()
+	passkeyWait[connId] = isWait
+	mx.Unlock()
+}
+
+func GetPasskeyWait(connId int) bool {
+	mx.Lock()
+	var isWait bool = passkeyWait[connId]
+	mx.Unlock()
+	return isWait
+}
+
 func GetNamesSynced(connId int) bool {
 	mx.Lock()
 	var isNamesSynced bool = namesSynced[connId]
@@ -336,7 +350,7 @@ func SetExpiration(connId int, chatId string, expiration uint32) {
 }
 
 // download info
-var downloadInfoVersion = 1 // bump version upon any struct change
+var downloadInfoVersion = 2 // bump version upon any struct change
 type DownloadInfo struct {
 	Version    int    `json:"Version_int"`
 	Url        string `json:"Url_string"`
@@ -345,7 +359,6 @@ type DownloadInfo struct {
 	TargetPath string              `json:"TargetPath_string"`
 	MediaKey   []byte              `json:"MediaKey_arraybyte"`
 	MediaType  whatsmeow.MediaType `json:"MediaType_MediaType"`
-	Size       int                 `json:"Size_int"`
 
 	FileEncSha256 []byte `json:"FileEncSha256_arraybyte"`
 	FileSha256    []byte `json:"FileSha256_arraybyte"`
@@ -357,7 +370,6 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 
 	info.TargetPath = targetPath
 	info.MediaKey = msg.GetMediaKey()
-	info.Size = whatsmeow.GetDownloadSize(msg)
 	info.FileEncSha256 = msg.GetFileEncSHA256()
 	info.FileSha256 = msg.GetFileSHA256()
 
@@ -367,12 +379,16 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 		return ""
 	}
 
+	// store both url and direct path when available; media urls expire, so the direct path is
+	// needed to re-download long after receipt (ex: after the profile tmp dir is cleared).
 	urlable, ok := msg.(whatsmeow.DownloadableMessageWithURL)
 	if ok && len(urlable.GetUrl()) > 0 {
 		info.Url = urlable.GetUrl()
-	} else if len(msg.GetDirectPath()) > 0 {
+	}
+	if len(msg.GetDirectPath()) > 0 {
 		info.DirectPath = msg.GetDirectPath()
-	} else {
+	}
+	if len(info.Url) == 0 && len(info.DirectPath) == 0 {
 		LOG_WARNING(fmt.Sprintf("url and path not present"))
 		return ""
 	}
@@ -454,16 +470,22 @@ func DownloadFromFileId(connId int, fileId string) (string, int) {
 
 func DownloadFromFileInfo(client *whatsmeow.Client, info DownloadInfo) ([]byte, error) {
 	ctx := context.TODO()
+	var err error = whatsmeow.ErrNoURLPresent
 	if len(info.Url) > 0 {
 		LOG_TRACE(fmt.Sprintf("download url: %s", info.Url))
-		return client.DownloadMediaWithUrl(ctx, info.Url, info.MediaKey, info.MediaType, info.Size, info.FileEncSha256, info.FileSha256)
-	} else if len(info.DirectPath) > 0 {
-		LOG_TRACE(fmt.Sprintf("download directpath: %s", info.DirectPath))
-		return client.DownloadMediaWithPath(ctx, info.DirectPath, info.FileEncSha256, info.FileSha256, info.MediaKey, info.Size, info.MediaType, whatsmeow.GetMMSType(info.MediaType))
-	} else {
-		LOG_WARNING(fmt.Sprintf("url and path not present"))
-		return nil, whatsmeow.ErrNoURLPresent
+		var data []byte
+		data, err = client.DownloadMediaWithUrl(ctx, info.Url, info.MediaKey, info.MediaType, info.FileEncSha256, info.FileSha256)
+		if err == nil {
+			return data, nil
+		}
+		// media urls expire; fall through to direct path if available
+		LOG_WARNING(fmt.Sprintf("download url error %#v", err))
 	}
+	if len(info.DirectPath) > 0 {
+		LOG_TRACE(fmt.Sprintf("download directpath: %s", info.DirectPath))
+		return client.DownloadMediaWithPath(ctx, info.DirectPath, info.FileEncSha256, info.FileSha256, info.MediaKey, info.MediaType, whatsmeow.GetMMSType(info.MediaType), false)
+	}
+	return nil, err
 }
 
 // utils
@@ -521,70 +543,7 @@ func GetConfigOrEnvFlag(envVarName string) bool {
 }
 
 func HasGUI() bool {
-	useQrTerminal := GetConfigOrEnvFlag("USE_QR_TERMINAL")
-	if useQrTerminal {
-		return false
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		LOG_INFO(fmt.Sprintf("has gui"))
-		LOG_DEBUG(fmt.Sprintf("gui check: [darwin default true]"))
-		return true
-
-	case "linux":
-		_, isDisplaySet := os.LookupEnv("DISPLAY")
-		file, err := ioutil.TempFile("/tmp", "nchat-x11check.*.sh")
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("create file failed %#v", err))
-			return isDisplaySet
-		}
-
-		defer os.Remove(file.Name())
-		content := "#!/usr/bin/env bash\n\n" +
-			"if command -v timeout &> /dev/null; then\n" +
-			"  CMD=\"timeout 1s xset q\"\n" +
-			"else\n" +
-			"  CMD=\"xset q\"\n" +
-			"fi\n" +
-			"echo \"${CMD}\"\n" +
-			"${CMD} > /dev/null\n" +
-			"exit ${?}\n"
-
-		_, err = io.WriteString(file, content)
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("write file failed %#v", err))
-			return isDisplaySet
-		}
-
-		err = file.Close()
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("close file failed %#v", err))
-			return isDisplaySet
-		}
-
-		err = os.Chmod(file.Name(), 0777)
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("chmod file failed %#v", err))
-			return isDisplaySet
-		}
-
-		cmdout, err := exec.Command(file.Name()).CombinedOutput()
-		if err == nil {
-			LOG_INFO(fmt.Sprintf("has gui"))
-			LOG_DEBUG(fmt.Sprintf("gui check: %s", strings.TrimSuffix(string(cmdout), "\n")))
-			return true
-		} else {
-			LOG_INFO(fmt.Sprintf("no gui"))
-			LOG_DEBUG(fmt.Sprintf("gui check: %s", strings.TrimSuffix(string(cmdout), "\n")))
-			return false
-		}
-
-	default:
-		LOG_INFO(fmt.Sprintf("no gui"))
-		LOG_DEBUG(fmt.Sprintf("gui check: [other \"%s\" default false]", runtime.GOOS))
-		return false
-	}
+	return IntToBool(CWmHasGui())
 }
 
 func BoolToInt(b bool) int {
@@ -1125,11 +1084,14 @@ func (handler *WmEventHandler) HandleGroupInfo(groupInfo *events.GroupInfo) {
 		return
 	}
 	chatId := GetChatId(client, &groupInfo.JID, nil)
-	userId := GetUserId(client, &groupInfo.JID, groupInfo.Sender)
 
+	// sender is optional (parsed from an optional "participant" attribute), and is
+	// legitimately nil for group changes not attributed to a participant
 	senderJidStr := ""
-	if userId != chatId {
-		senderJidStr = userId
+	if groupInfo.Sender != nil {
+		if userId := GetUserId(client, &groupInfo.JID, groupInfo.Sender); userId != chatId {
+			senderJidStr = userId
+		}
 	}
 
 	// text
@@ -1271,7 +1233,7 @@ func (handler *WmEventHandler) HandleArchive(archive *events.Archive) {
 
 	isArchived := archiveAction.GetArchived()
 
-	LOG_TRACE(fmt.Sprintf("Call CWmUpdateArchivedNotify %s %d", chatId, isArchived))
+	LOG_TRACE(fmt.Sprintf("Call CWmUpdateArchivedNotify %s %t", chatId, isArchived))
 	CWmUpdateArchivedNotify(connId, chatId, BoolToInt(isArchived))
 }
 
@@ -1611,6 +1573,85 @@ func GetContacts(connId int) {
 	CWmClearStatus(connId, FlagFetching)
 }
 
+// ContactCard holds the contact details displayed for a shared contact.
+type ContactCard struct {
+	Name   string
+	Phones []string
+	Emails []string
+}
+
+// FormatContactCards formats one or more contact cards as a "[Contact]" tag on its own line,
+// followed by "Field: value" lines per contact, with contacts separated by a blank line.
+func FormatContactCards(cards []ContactCard) string {
+	var blocks []string
+	for _, card := range cards {
+		var lines []string
+		if card.Name != "" {
+			lines = append(lines, "Name: "+card.Name)
+		}
+		if len(card.Phones) > 0 {
+			lines = append(lines, "Phone: "+strings.Join(card.Phones, ", "))
+		}
+		if len(card.Emails) > 0 {
+			lines = append(lines, "Email: "+strings.Join(card.Emails, ", "))
+		}
+
+		if len(lines) > 0 {
+			blocks = append(blocks, strings.Join(lines, "\n"))
+		}
+	}
+
+	if len(blocks) == 0 {
+		return "[Contact]"
+	}
+
+	return "[Contact]\n" + strings.Join(blocks, "\n\n")
+}
+
+// GetVcardValues gets the values of a vCard field (ex: "TEL", "EMAIL"), ignoring any item group
+// prefix and type params, i.e. "item1.EMAIL;type=INTERNET:a@b.c" is field "EMAIL" with value "a@b.c".
+func GetVcardValues(vcard string, field string) []string {
+	var values []string
+	for _, line := range strings.Split(vcard, "\n") {
+		colonPos := strings.Index(line, ":")
+		if colonPos == -1 {
+			continue
+		}
+
+		name := line[:colonPos]
+		if semiPos := strings.Index(name, ";"); semiPos != -1 {
+			name = name[:semiPos]
+		}
+		if dotPos := strings.Index(name, "."); dotPos != -1 {
+			name = name[dotPos+1:]
+		}
+
+		if !strings.EqualFold(strings.TrimSpace(name), field) {
+			continue
+		}
+
+		if value := strings.TrimSpace(line[colonPos+1:]); value != "" {
+			values = append(values, value)
+		}
+	}
+
+	return values
+}
+
+func GetContactCards(contacts []*waE2E.ContactMessage) []ContactCard {
+	var cards []ContactCard
+	for _, contact := range contacts {
+		vcard := contact.GetVcard()
+		cards = append(cards, ContactCard{
+			Name:   strings.TrimSpace(contact.GetDisplayName()),
+			Phones: GetVcardValues(vcard, "TEL"),
+			Emails: GetVcardValues(vcard, "EMAIL"),
+		})
+	}
+
+	return cards
+}
+
 func (handler *WmEventHandler) HandleMessage(messageInfo types.MessageInfo, msg *waE2E.Message, isSyncRead bool) {
 	switch {
 	case msg.Conversation != nil || msg.ExtendedTextMessage != nil:
@@ -1619,7 +1660,7 @@ func (handler *WmEventHandler) HandleMessage(messageInfo types.MessageInfo, msg 
 	case msg.ImageMessage != nil:
 		handler.HandleImageMessage(messageInfo, msg, isSyncRead)
 
-	case msg.VideoMessage != nil:
+	case msg.VideoMessage != nil || msg.PtvMessage != nil:
 		handler.HandleVideoMessage(messageInfo, msg, isSyncRead)
 
 	case msg.AudioMessage != nil:
@@ -1642,6 +1683,16 @@ func (handler *WmEventHandler) HandleMessage(messageInfo types.MessageInfo, msg 
 
 	case msg.PinInChatMessage != nil:
 		handler.HandlePinInChatMessage(messageInfo, msg)
+
+	case msg.ContactMessage != nil, msg.ContactsArrayMessage != nil:
+		contacts := msg.ContactsArrayMessage.GetContacts()
+		if msg.ContactMessage != nil {
+			contacts = []*waE2E.ContactMessage{msg.ContactMessage}
+		}
+
+		contactText := FormatContactCards(GetContactCards(contacts))
+		msg.Conversation = &contactText
+		handler.HandleTextMessage(messageInfo, msg, isSyncRead)
 
 	default:
 		handler.HandleUnsupportedMessage(messageInfo, msg, isSyncRead)
@@ -1848,6 +1899,10 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 
 	// get video part
 	vid := msg.GetVideoMessage()
+	if vid == nil {
+		// video note / ptv
+		vid = msg.GetPtvMessage()
+	}
 	if vid == nil {
 		LOG_WARNING(fmt.Sprintf("get video message failed"))
 		return
@@ -2501,6 +2556,95 @@ func WmInit(path string, proxy string, sendType int) int {
 	return connId
 }
 
+// ReadPastedJson reads lines from r until the accumulated content parses as a
+// complete JSON value. This allows the user to paste either a single-line or a
+// pretty-printed JSON document. It returns an error on EOF or if only blank
+// input is provided.
+func ReadPastedJson(r io.Reader) ([]byte, error) {
+	reader := bufio.NewReader(r)
+	var buf strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		buf.WriteString(line)
+		trimmed := strings.TrimSpace(buf.String())
+		if (len(trimmed) > 0) && json.Valid([]byte(trimmed)) {
+			return []byte(trimmed), nil
+		}
+		if err != nil {
+			if len(trimmed) == 0 {
+				return nil, fmt.Errorf("no passkey response provided")
+			}
+			return nil, fmt.Errorf("incomplete or invalid passkey response json")
+		}
+	}
+}
+
+// GetPasskeyResponse handles an *events.PairPasskeyRequest by asking the user to
+// produce a WebAuthn assertion for the given challenge and reading the resulting
+// response json from stdin.
+//
+// WhatsApp passkey-locked accounts require an assertion signed by the account
+// owner's own authenticator, bound to the web.whatsapp.com origin. This cannot
+// be produced by nchat itself, so the user must run navigator.credentials.get()
+// in a signed-in web.whatsapp.com browser tab and paste the result back here.
+// See doc/WMPASSKEY.md for details.
+func GetPasskeyResponse(publicKey *types.WebAuthnPublicKey) (*types.WebAuthnResponse, error) {
+	pubKeyJson, err := json.Marshal(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal passkey request options: %w", err)
+	}
+
+	fmt.Printf("\n")
+	fmt.Printf("This WhatsApp account requires passkey authentication to link a new device.\n")
+	fmt.Printf("nchat cannot access your passkey directly, so please complete these steps:\n")
+	fmt.Printf("\n")
+	fmt.Printf("1. In a browser, open https://web.whatsapp.com signed in to (or able to\n")
+	fmt.Printf("   authenticate with the passkey of) this WhatsApp account.\n")
+	fmt.Printf("2. Open the browser developer console (F12 / Cmd-Opt-J) and run:\n")
+	fmt.Printf("\n")
+	fmt.Printf("   const opts = PublicKeyCredential.parseRequestOptionsFromJSON(%s);\n", string(pubKeyJson))
+	fmt.Printf("   const cred = await navigator.credentials.get({ publicKey: opts });\n")
+	fmt.Printf("   console.log(JSON.stringify(cred.toJSON()));\n")
+	fmt.Printf("\n")
+	fmt.Printf("3. Approve the passkey prompt, then copy the single JSON line it prints.\n")
+	fmt.Printf("4. Paste that JSON below and press Enter (or press CTRL-C to abort):\n")
+	fmt.Printf("\n")
+
+	respJson, err := ReadPastedJson(os.Stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp types.WebAuthnResponse
+	if err := json.Unmarshal(respJson, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse pasted passkey response: %w", err)
+	}
+
+	return &resp, nil
+}
+
+// ConfirmPasskeyHandoff handles an *events.PairPasskeyConfirmation with
+// SkipHandoffUX set to false by showing the pairing code and asking the user to
+// verify it matches the code shown on their phone before completing pairing.
+// When SkipHandoffUX is true the QR channel confirms automatically and this is
+// not reached.
+func ConfirmPasskeyHandoff(connId int, cli *whatsmeow.Client, confirmation *events.PairPasskeyConfirmation) {
+	fmt.Printf("\n")
+	fmt.Printf("Verify that your phone shows the following pairing code:\n")
+	fmt.Printf("\n")
+	fmt.Printf("    %s\n", confirmation.Code)
+	fmt.Printf("\n")
+	fmt.Printf("Press Enter to confirm the codes match (or press CTRL-C to abort):\n")
+
+	reader := bufio.NewReader(os.Stdin)
+	_, _ = reader.ReadString('\n')
+
+	if err := cli.SendPasskeyConfirmation(context.TODO()); err != nil {
+		LOG_WARNING(fmt.Sprintf("send passkey confirmation error %#v", err))
+		SetState(connId, Disconnected)
+	}
+}
+
 func WmLogin(connId int) int {
 
 	LOG_DEBUG("login " + strconv.Itoa(connId) + " whatsmeow " + strconv.Itoa(whatsmeowDate))
@@ -2555,8 +2699,15 @@ func WmLogin(connId int) int {
 				fmt.Printf("Scan the Qr code to authenticate, or press CTRL-C to abort.\n")
 			}
 
+			passkeyRequired := false
 			for evt := range ch {
 				if evt.Event == whatsmeow.QRChannelEventCode {
+					if passkeyRequired {
+						// Passkey-locked accounts keep emitting QR codes that can
+						// never complete pairing, so ignore them once a passkey
+						// response has been requested.
+						continue
+					}
 					if usePairingCode {
 						ctx := context.TODO()
 						phoneNumber := GetPhoneNumberFromPath(path)
@@ -2578,6 +2729,25 @@ func WmLogin(connId int) int {
 							qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 						}
 					}
+				} else if evt.Event == whatsmeow.QRChannelEventPasskeyRequest {
+					passkeyRequired = true
+					SetPasskeyWait(connId, true)
+					resp, respErr := GetPasskeyResponse(evt.PasskeyRequest.PublicKey)
+					SetPasskeyWait(connId, false)
+					if respErr != nil {
+						LOG_WARNING(fmt.Sprintf("get passkey response error %#v", respErr))
+						SetState(connId, Disconnected)
+					} else if sendErr := cli.SendPasskeyResponse(context.TODO(), resp); sendErr != nil {
+						LOG_WARNING(fmt.Sprintf("send passkey response error %#v", sendErr))
+						SetState(connId, Disconnected)
+					} else {
+						fmt.Printf("\n")
+						fmt.Printf("Passkey response sent, completing pairing...\n")
+					}
+				} else if evt.Event == whatsmeow.QRChannelEventPasskeyResponse {
+					// Reached only when SkipHandoffUX is false; otherwise the QR
+					// channel sends the confirmation automatically.
+					ConfirmPasskeyHandoff(connId, cli, evt.PasskeyConfirmation)
 				} else if evt == whatsmeow.QRChannelSuccess {
 					LOG_DEBUG("qr channel event success")
 				} else if evt == whatsmeow.QRChannelClientOutdated {
@@ -2608,7 +2778,14 @@ func WmLogin(connId int) int {
 	// wait for result (up to timeout, 100 ms at a time)
 	LOG_DEBUG("wait start")
 	waitedMs := 0
-	for (waitedMs < timeoutMs) && (GetState(connId) == Connecting) {
+	for GetState(connId) == Connecting {
+		if GetPasskeyWait(connId) {
+			// Suspend the pairing timeout while awaiting an interactive passkey
+			// response, as that involves a manual browser step by the user.
+			waitedMs = 0
+		} else if waitedMs >= timeoutMs {
+			break
+		}
 		time.Sleep(100 * time.Millisecond)
 		waitedMs += 100
 	}
@@ -3498,8 +3675,9 @@ func WmDownloadFile(connId int, chatId string, msgId string, fileId string, acti
 	// download file
 	filePath, fileStatus := DownloadFromFileId(connId, fileId)
 
-	// notify result
-	CWmNewMessageFileNotify(connId, chatId, msgId, filePath, fileStatus, action)
+	// notify result (pass fileId back so the attachment stays re-downloadable if its file is
+	// later removed, ex: when the profile tmp dir is cleared between sessions)
+	CWmNewMessageFileNotify(connId, chatId, msgId, fileId, filePath, fileStatus, action)
 
 	return 0
 }

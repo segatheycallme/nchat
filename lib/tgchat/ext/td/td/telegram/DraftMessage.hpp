@@ -9,8 +9,11 @@
 #include "td/telegram/DraftMessage.h"
 
 #include "td/telegram/InputMessageText.hpp"
+#include "td/telegram/MessageContent.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/MessageInputReplyTo.hpp"
+#include "td/telegram/RichMessage.h"
+#include "td/telegram/RichMessage.hpp"
 #include "td/telegram/SuggestedPost.hpp"
 #include "td/telegram/Version.h"
 
@@ -25,12 +28,15 @@ void DraftMessage::store(StorerT &storer) const {
   bool has_local_content = local_content_ != nullptr;
   bool has_message_effect_id = message_effect_id_.is_valid();
   bool has_suggested_post = suggested_post_ != nullptr;
+  bool is_rich = rich_message_content_ != nullptr;
   BEGIN_STORE_FLAGS();
   STORE_FLAG(has_input_message_text);
   STORE_FLAG(has_message_input_reply_to);
   STORE_FLAG(has_local_content);
   STORE_FLAG(has_message_effect_id);
   STORE_FLAG(has_suggested_post);
+  STORE_FLAG(false);
+  STORE_FLAG(is_rich);
   END_STORE_FLAGS();
   td::store(date_, storer);
   if (has_input_message_text) {
@@ -48,6 +54,9 @@ void DraftMessage::store(StorerT &storer) const {
   if (has_suggested_post) {
     td::store(suggested_post_, storer);
   }
+  if (is_rich) {
+    store_message_content(rich_message_content_.get(), storer);
+  }
 }
 
 template <class ParserT>
@@ -58,6 +67,8 @@ void DraftMessage::parse(ParserT &parser) {
   bool has_local_content = false;
   bool has_message_effect_id = false;
   bool has_suggested_post = false;
+  bool is_rich_legacy = false;
+  bool is_rich = false;
   if (parser.version() >= static_cast<int32>(Version::SupportRepliesInOtherChats)) {
     has_legacy_reply_to_message_id = false;
     BEGIN_PARSE_FLAGS();
@@ -66,6 +77,8 @@ void DraftMessage::parse(ParserT &parser) {
     PARSE_FLAG(has_local_content);
     PARSE_FLAG(has_message_effect_id);
     PARSE_FLAG(has_suggested_post);
+    PARSE_FLAG(is_rich_legacy);
+    PARSE_FLAG(is_rich);
     END_PARSE_FLAGS();
   } else {
     has_legacy_reply_to_message_id = true;
@@ -84,7 +97,7 @@ void DraftMessage::parse(ParserT &parser) {
     td::parse(message_input_reply_to_, parser);
 
     auto message_id = message_input_reply_to_.get_same_chat_reply_to_message_id();
-    if (message_id.is_valid() && message_id.is_yet_unsent()) {
+    if (message_id.is_valid() && (message_id.is_yet_unsent() || message_id.is_local())) {
       message_input_reply_to_ = {};
     }
   }
@@ -96,6 +109,14 @@ void DraftMessage::parse(ParserT &parser) {
   }
   if (has_suggested_post) {
     td::parse(suggested_post_, parser);
+  }
+  if (is_rich_legacy) {
+    RichMessage rich_message;
+    td::parse(rich_message, parser);
+    rich_message_content_ = create_rich_message_content(std::move(rich_message));
+  }
+  if (is_rich) {
+    parse_message_content(rich_message_content_, parser);
   }
 }
 

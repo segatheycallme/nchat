@@ -10,6 +10,7 @@
 #include "td/telegram/DialogId.h"
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/ForumTopicId.h"
+#include "td/telegram/MessageContentUploadId.h"
 #include "td/telegram/MessageEntity.h"
 #include "td/telegram/MessageFullId.h"
 #include "td/telegram/MessageId.h"
@@ -20,6 +21,7 @@
 #include "td/telegram/ReplyMarkup.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/telegram_api.h"
+#include "td/telegram/WebPageId.h"
 
 #include "td/actor/actor.h"
 #include "td/actor/MultiTimeout.h"
@@ -33,6 +35,7 @@
 #include "td/utils/WaitFreeHashMap.h"
 #include "td/utils/WaitFreeHashSet.h"
 
+#include <memory>
 #include <utility>
 
 namespace td {
@@ -95,6 +98,8 @@ class PollManager final : public Actor {
   void add_poll_option(MessageFullId message_full_id, td_api::object_ptr<td_api::inputPollOption> &&option,
                        Promise<Unit> &&promise);
 
+  void cancel_add_poll_option(MessageContentUploadId upload_id, Status status);
+
   void delete_poll_option(MessageFullId message_full_id, const string &option_id, Promise<Unit> &&promise);
 
   void set_poll_answer(MessageFullId message_full_id, vector<int32> &&option_ids, Promise<Unit> &&promise);
@@ -107,6 +112,8 @@ class PollManager final : public Actor {
 
   void stop_local_poll(PollId poll_id);
 
+  void delete_pending_web_page(PollId poll_id, WebPageId web_page_id);
+
   vector<unique_ptr<MessageContent>> get_individual_message_contents(PollId poll_id,
                                                                      const MessageContent *attached_media) const;
 
@@ -118,10 +125,9 @@ class PollManager final : public Actor {
   unique_ptr<MessageContent> &get_individual_message_content(PollId poll_id, unique_ptr<MessageContent> &attached_media,
                                                              int32 media_pos);
 
-  PollId dup_poll(DialogId dialog_id, PollId poll_id);
+  void notify_on_poll_update(PollId poll_id);
 
-  Result<unique_ptr<MessageContent>> get_poll_media_message_content(
-      td_api::object_ptr<td_api::InputMessageContent> input_message_content, DialogId dialog_id, bool is_premium);
+  PollId dup_poll(DialogId dialog_id, PollId poll_id);
 
   bool has_input_media(PollId poll_id) const;
 
@@ -201,6 +207,8 @@ class PollManager final : public Actor {
   class SetPollAnswerLogEvent;
   class StopPollLogEvent;
 
+  class UploadPollOptionContentCallback;
+
   void start_up() final;
   void tear_down() final;
 
@@ -223,8 +231,6 @@ class PollManager final : public Actor {
   bool can_unload_poll(PollId poll_id);
 
   void schedule_poll_unload(PollId poll_id);
-
-  void notify_on_poll_update(PollId poll_id);
 
   void notify_on_poll_has_unread_votes_update(PollId poll_id, bool has_unread_votes);
 
@@ -290,6 +296,8 @@ class PollManager final : public Actor {
 
   bool can_get_poll_voters(PollId poll_id, const Poll *poll, DialogId initial_dialog_id, int32 initial_date) const;
 
+  static vector<WebPageId> get_poll_web_page_ids(const Poll *poll);
+
   MultiTimeout update_poll_timeout_{"UpdatePollTimeout"};
   MultiTimeout close_poll_timeout_{"ClosePollTimeout"};
   MultiTimeout unload_poll_timeout_{"UnloadPollTimeout"};
@@ -316,6 +324,15 @@ class PollManager final : public Actor {
   int64 current_local_poll_id_ = 0;
 
   uint64 current_generation_ = 0;
+
+  struct AddPollOptionQuery {
+    MessageFullId message_full_id_;
+    PollOption option_;
+    Promise<Unit> promise_;
+  };
+  FlatHashMap<MessageContentUploadId, AddPollOptionQuery, MessageContentUploadIdHash> add_poll_option_queries_;
+
+  std::shared_ptr<UploadPollOptionContentCallback> upload_poll_option_content_callback_;
 
   FlatHashSet<PollId, PollIdHash> loaded_from_database_polls_;
 

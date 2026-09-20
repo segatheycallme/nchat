@@ -6,10 +6,9 @@
 //
 #include "td/utils/port/path.h"
 
-#include "td/utils/port/config.h"
-
 #include "td/utils/format.h"
 #include "td/utils/logging.h"
+#include "td/utils/port/config.h"
 #include "td/utils/port/detail/skip_eintr.h"
 #include "td/utils/ScopeGuard.h"
 #include "td/utils/SliceBuilder.h"
@@ -583,7 +582,7 @@ static Result<bool> walk_path_dir(const std::wstring &dir_name,
   std::wstring name = dir_name + L"\\*";
   WIN32_FIND_DATA file_data;
   auto handle =
-      td::FindFirstFileExFromAppW(name.c_str(), FindExInfoStandard, &file_data, FindExSearchNameMatch, nullptr, 0);
+      td::FindFirstFileExFromAppW(name.c_str(), FindExInfoBasic, &file_data, FindExSearchNameMatch, nullptr, 0);
   if (handle == INVALID_HANDLE_VALUE) {
     return OS_ERROR(PSLICE() << "FindFirstFileEx" << tag("name", from_wstring(name).ok()));
   }

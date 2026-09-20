@@ -43,6 +43,7 @@ func Encrypt(ctx context.Context, plaintext []byte, forAddress, localAddress *Ad
 	)
 	runtime.KeepAlive(plaintext)
 	runtime.KeepAlive(forAddress)
+	runtime.KeepAlive(localAddress)
 	if signalFfiError != nil {
 		return nil, callbackCtx.wrapError(signalFfiError)
 	}
@@ -63,6 +64,7 @@ func Decrypt(ctx context.Context, message *Message, fromAddress, localAddress *A
 	)
 	runtime.KeepAlive(message)
 	runtime.KeepAlive(fromAddress)
+	runtime.KeepAlive(localAddress)
 	if signalFfiError != nil {
 		return nil, callbackCtx.wrapError(signalFfiError)
 	}
@@ -71,10 +73,10 @@ func Decrypt(ctx context.Context, message *Message, fromAddress, localAddress *A
 
 type Message struct {
 	nc  noCopy
-	ptr *C.SignalMessage
+	ptr *C.SignalSignalMessage
 }
 
-func wrapMessage(ptr *C.SignalMessage) *Message {
+func wrapMessage(ptr *C.SignalSignalMessage) *Message {
 	message := &Message{ptr: ptr}
 	runtime.SetFinalizer(message, (*Message).Destroy)
 	return message
@@ -155,23 +157,4 @@ func (m *Message) GetCounter() (uint32, error) {
 		return 0, wrapError(signalFfiError)
 	}
 	return uint32(counter), nil
-}
-
-func (m *Message) VerifyMAC(sender, receiver *PublicKey, macKey []byte) (bool, error) {
-	var result C.bool
-	signalFfiError := C.signal_message_verify_mac(
-		&result,
-		m.constPtr(),
-		sender.constPtr(),
-		receiver.constPtr(),
-		BytesToBuffer(macKey),
-	)
-	runtime.KeepAlive(m)
-	runtime.KeepAlive(sender)
-	runtime.KeepAlive(receiver)
-	runtime.KeepAlive(macKey)
-	if signalFfiError != nil {
-		return false, wrapError(signalFfiError)
-	}
-	return bool(result), nil
 }

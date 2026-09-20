@@ -52,6 +52,8 @@ func NewFingerprint(iterations, version FingerprintVersion, localIdentifier []by
 		BytesToBuffer(remoteIdentifier),
 		remoteKey.constPtr(),
 	)
+	runtime.KeepAlive(localKey)
+	runtime.KeepAlive(remoteKey)
 	if signalFfiError != nil {
 		return nil, wrapError(signalFfiError)
 	}
@@ -92,7 +94,7 @@ func (f *Fingerprint) ScannableEncoding() ([]byte, error) {
 }
 
 func (f *Fingerprint) DisplayString() (string, error) {
-	var displayString *C.char
+	var displayString C.SignalCStringPtr
 	signalFfiError := C.signal_fingerprint_display_string(&displayString, f.constPtr())
 	runtime.KeepAlive(f)
 	if signalFfiError != nil {
